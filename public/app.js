@@ -137,9 +137,19 @@ function updateFollowBtn() {
 }
 
 function startTracking() {
-  if (!navigator.geolocation) { toast('Geolocation not available here.'); return; }
   liveTracking = true;
   updateFollowBtn();
+  // In the native app, positions arrive via __worldsongFeedPosition — don't also
+  // start the WebView's own geolocation watcher.
+  if (window.__NATIVE_GPS) {
+    toast('Following your location — the music will change as you travel.');
+    return;
+  }
+  if (!navigator.geolocation) {
+    toast('Geolocation not available here.');
+    liveTracking = false; updateFollowBtn();
+    return;
+  }
   if (watchId == null) {
     watchId = navigator.geolocation.watchPosition(
       (pos) => { if (liveTracking) maybeResolve(pos.coords.latitude, pos.coords.longitude, true); },
@@ -188,6 +198,14 @@ function toggleTour() {
 
 // dev/testing hook: simulate a GPS reading from the console or an automated test.
 window.__simPos = (lat, lon) => maybeResolve(lat, lon, true);
+
+// Native shell (Expo WebView) hook: the React Native layer feeds high-accuracy GPS
+// straight in here. window.__NATIVE_GPS is injected before page load so boot() and
+// startTracking() defer to these positions instead of the WebView's weaker geo.
+window.__worldsongFeedPosition = (lat, lon) => {
+  if (!liveTracking) { liveTracking = true; updateFollowBtn(); }
+  maybeResolve(lat, lon, true);
+};
 
 async function vote(action) {
   if (!zone) return;
@@ -355,6 +373,15 @@ function boot() {
   const fallback = () => loadZone(-37.8136, 144.9631, { announce: false }).then(() => {
     $('hint').textContent = 'Location unavailable — dropped you in Melbourne. Use 🧭 Tour, ✈ Explore, or the map to travel.';
   }).catch((e) => toast('Server error: ' + e.message));
+
+  // Native app: positions are fed in via __worldsongFeedPosition. Start in
+  // following mode; if no fix arrives shortly, drop a sensible default.
+  if (window.__NATIVE_GPS) {
+    startTracking();
+    setTimeout(() => { if (!currentZoneId) fallback(); }, 8000);
+    refreshWorld();
+    return;
+  }
 
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(

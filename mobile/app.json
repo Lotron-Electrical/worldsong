@@ -1,0 +1,49 @@
+{
+  "expo": {
+    "name": "Worldsong",
+    "slug": "worldsong",
+    "owner": "lotron",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "worldsong",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#07080f",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.worldsong.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Worldsong uses your location to play the music of the place you're in and change it as you move between suburbs."
+      }
+    },
+    "android": {
+      "package": "dev.worldsong.app",
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+      "adaptiveIcon": {
+        "backgroundColor": "#07080f",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Worldsong uses your location to play the music of the place you're in and change it as you move between suburbs."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#07080f",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
