@@ -86,6 +86,12 @@ One arm chosen per dimension: `scale, root, tempo, lead, pad, bass, drums, densi
 brightness`. The audio engine reads the genome and the seed (the seed makes the melody
 reproducible so a zone sounds identical for every listener).
 
+> **Note on `_concurrent-alt-backend/`** — during the build, a second process produced a
+> parallel, more granular backend (modular `server/` + `test/`). It works, but its genome
+> vocabulary doesn't fully line up with this client's audio engine, so it's preserved under
+> `_concurrent-alt-backend/` rather than wired in. The canonical, verified app is the
+> root `server.js` + `public/` pair you get from `npm start`.
+
 ---
 
 ## Roadmap / how to take it further
