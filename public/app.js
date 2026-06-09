@@ -45,7 +45,9 @@ function renderZone(p) {
   zone = p;
   $('zoneName').textContent = p.name;
   $('profileZone').textContent = p.name;
-  $('coords').textContent = `${p.zoneId}   ·   ${fmtCoord(p.center.lat, p.center.lon)}`;
+  $('coords').textContent = p.label
+    ? `${p.label}   ·   ${fmtCoord(p.center.lat, p.center.lon)}`
+    : fmtCoord(p.center.lat, p.center.lon);
   $('upCount').textContent = p.stats.upvotes;
   $('downCount').textContent = p.stats.downvotes;
   $('matFill').style.width = `${Math.round(p.maturity * 100)}%`;
@@ -78,40 +80,51 @@ function renderProfile(profile) {
 }
 
 // ---------------------------------------------------------------- location/zones
-// Client-side copy of the server's grid quantization (zones.js). Lets us detect
-// when we've crossed into a NEW zone cell without hitting the API on every GPS tick.
-const GRID = 0.01;
-function localZoneId(lat, lon) {
-  lat = Math.max(-85, Math.min(85, Number(lat)));
-  lon = ((((Number(lon) + 180) % 360) + 360) % 360) - 180;
-  const clat = Math.round(lat / GRID) * GRID;
-  const clon = Math.round(lon / GRID) * GRID;
-  return `z_${clat.toFixed(2)}_${clon.toFixed(2)}`;
-}
+// A zone is now a REAL place (suburb / postcode), resolved server-side by reverse
+// geocoding. The browser can't compute that offline, so instead of a local grid we
+// throttle by actual distance moved: we only re-ask the server once you've walked
+// far enough that you might be in a new suburb. The server (which caches) is the
+// single source of truth for "what place am I in", and the song only changes when
+// the returned zone id actually changes — so GPS jitter never restarts the music.
+const MOVE_THRESH_M = 70; // metres you must move before we re-check the map
 
-let currentZoneId = null; // the zone we're currently sitting in
+let currentZoneId = null;  // the place we're currently sitting in
 let liveTracking = false;
 let watchId = null;
+let lastResolved = null;   // {lat, lon} of the last point we asked the server about
+
+// Great-circle distance in metres (haversine).
+function distM(a, b) {
+  const R = 6371000, toR = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * toR, dLon = (b.lon - a.lon) * toR;
+  const la1 = a.lat * toR, la2 = b.lat * toR;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
 
 // ---------------------------------------------------------------- actions
 async function loadZone(lat, lon, opts = {}) {
+  lat = Number(lat); lon = Number(lon);
+  lastResolved = { lat, lon };
   const p = await api(`/api/zone?lat=${lat}&lon=${lon}`);
   const changed = p.zoneId !== currentZoneId;
   currentZoneId = p.zoneId;
   renderZone(p);
-  // Auto-transitions (travelling) cross-fade; manual loads while playing also
-  // cross-fade; when stopped we just preload the track.
-  if (playing) engine.transition(p.currentTrack.genome, p.currentTrack.seed);
-  else engine.swap(p.currentTrack.genome, p.currentTrack.seed);
+  // Only touch the audio when we've genuinely crossed into a new place. Moving
+  // around within the same suburb leaves the song playing untouched.
+  if (changed) {
+    if (playing) engine.transition(p.currentTrack.genome, p.currentTrack.seed);
+    else engine.swap(p.currentTrack.genome, p.currentTrack.seed);
+    if (opts.announce) toast(`📍 Entered ${p.name}`);
+  }
   refreshWorld();
-  if (changed && opts.announce) toast(`📍 Entered ${p.name}`);
   return p;
 }
 
-// Only re-load when the user has actually crossed into a different zone cell.
-async function enterIfChanged(lat, lon, announce = false) {
-  const zid = localZoneId(lat, lon);
-  if (zid === currentZoneId) return; // same cell — leave the music alone
+// Live-tracking gate: only re-resolve once you've actually moved far enough to
+// possibly be in a new suburb. Collapses GPS jitter without any local map data.
+async function maybeResolve(lat, lon, announce = false) {
+  if (lastResolved && distM(lastResolved, { lat: Number(lat), lon: Number(lon) }) < MOVE_THRESH_M) return;
   await loadZone(lat, lon, { announce }).catch((e) => toast('Server error: ' + e.message));
 }
 
@@ -129,7 +142,7 @@ function startTracking() {
   updateFollowBtn();
   if (watchId == null) {
     watchId = navigator.geolocation.watchPosition(
-      (pos) => { if (liveTracking) enterIfChanged(pos.coords.latitude, pos.coords.longitude, true); },
+      (pos) => { if (liveTracking) maybeResolve(pos.coords.latitude, pos.coords.longitude, true); },
       () => {},
       { enableHighAccuracy: true, maximumAge: 4000, timeout: 20000 },
     );
@@ -174,7 +187,7 @@ function toggleTour() {
 }
 
 // dev/testing hook: simulate a GPS reading from the console or an automated test.
-window.__simPos = (lat, lon) => enterIfChanged(lat, lon, true);
+window.__simPos = (lat, lon) => maybeResolve(lat, lon, true);
 
 async function vote(action) {
   if (!zone) return;
@@ -346,7 +359,7 @@ function boot() {
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        enterIfChanged(pos.coords.latitude, pos.coords.longitude, false)
+        maybeResolve(pos.coords.latitude, pos.coords.longitude, false)
           .then(() => startTracking()); // begin following as the user travels
       },
       () => fallback(),

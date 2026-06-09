@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { openDb } from './db.js';
-import { zoneFor, zoneName } from './zones.js';
+import { resolveZone } from './geocode.js';
 import {
   sampleGenome, applyVote, profileSummary, maturity, DIMENSIONS,
 } from './bandit.js';
@@ -79,15 +79,14 @@ function regenerate(zone) {
 }
 
 // Ensure a zone row exists; create with an initial track if not.
-function ensureZone(id, lat, lon) {
-  let zone = db.getZone(id);
-  if (zone) return zone;
-  const name = zoneName(id);
-  const seed = db.seedFor(id, 1);
-  const getStat = db.statReader(id); // all priors -> exploratory first track
+// `z` is a resolved descriptor from geocode.js: { id, name, label, lat, lon }.
+function ensureZone(z) {
+  const existing = db.getZone(z.id);
+  if (existing) return existing;
+  const seed = db.seedFor(z.id, 1);
+  const getStat = db.statReader(z.id); // all priors -> exploratory first track
   const genome = sampleGenome(getStat, seed);
-  zone = db.createZone(id, lat, lon, name, seed, JSON.stringify(genome));
-  return zone;
+  return db.createZone(z.id, z.lat, z.lon, z.name, z.label, seed, JSON.stringify(genome));
 }
 
 function zonePayload(zone) {
@@ -95,6 +94,7 @@ function zonePayload(zone) {
   return {
     zoneId: zone.id,
     name: zone.name,
+    label: zone.label || '',
     center: { lat: zone.lat, lon: zone.lon },
     currentTrack: { seed: zone.current_seed, genome: JSON.parse(zone.current_genome) },
     stats: {
@@ -118,10 +118,10 @@ const server = http.createServer(async (req, res) => {
       const lat = parseFloat(url.searchParams.get('lat'));
       const lon = parseFloat(url.searchParams.get('lon'));
       if (Number.isNaN(lat) || Number.isNaN(lon)) return send(res, 400, { error: 'lat/lon required' });
-      const { id, lat: clat, lon: clon } = zoneFor(lat, lon);
-      const zone = ensureZone(id, clat, clon);
-      db.recordPlay(id);
-      return send(res, 200, zonePayload(db.getZone(id)));
+      const z = await resolveZone(db, lat, lon); // -> real suburb / postcode boundary
+      ensureZone(z);
+      db.recordPlay(z.id);
+      return send(res, 200, zonePayload(db.getZone(z.id)));
     }
 
     if (url.pathname === '/api/vote' && req.method === 'POST') {

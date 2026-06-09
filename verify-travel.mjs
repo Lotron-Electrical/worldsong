@@ -12,8 +12,12 @@ const PORT = 5601;
 const DB = path.join(__dirname, 'travel.db');
 for (const f of [DB, DB + '-wal', DB + '-shm']) { try { fs.unlinkSync(f); } catch {} }
 
+// Use the deterministic offline geocoder so this test is hermetic (no network,
+// no OSM rate limits). The real suburb/postcode path is covered by gtest.mjs.
 const srv = spawn(process.execPath, ['server.js'], {
-  cwd: __dirname, env: { ...process.env, PORT: String(PORT), DB_PATH: DB }, stdio: 'ignore',
+  cwd: __dirname,
+  env: { ...process.env, PORT: String(PORT), DB_PATH: DB, GEOCODE_PROVIDER: 'mock' },
+  stdio: 'ignore',
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function cleanup(code) {

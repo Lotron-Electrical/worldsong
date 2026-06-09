@@ -21,8 +21,8 @@ it runs on Node's built-ins alone.
 | **AI-generated music** | A procedural generative audio engine (Web Audio API) synthesises drums, bass, pads and lead from a parameter set called a *genome*. No samples, no streaming. |
 | **Machine learning from votes** | Each zone runs a **per-dimension Thompson-sampling multi-armed bandit**. Every musical choice (scale, tempo, instruments, drums, space, tone…) is an arm with a Beta(α,β) posterior. Upvotes bump α, downvotes bump β. The next track is sampled from the learned posteriors, so the zone exploits what's liked while still exploring. |
 | **Voting via next / previous** | ⏭ Forward = upvote the current track *and* advance to a freshly sampled one. ⏮ Back = downvote the current track *and* return to the previous one. Explicit 👍 / 👎 are also wired in. |
-| **Location-dependent, shared** | Your browser's latitude/longitude is quantised to a ~1 km grid cell (a *zone*). The server holds the current track per zone, so everyone in that cell hears the same thing. |
-| **Unique sound profiles worldwide** | Because the bandit state is per-zone and persisted, every location drifts toward its own local taste. The in-app world map plots every discovered zone, coloured by its dominant mood. |
+| **Location-dependent, shared** | Your latitude/longitude is reverse-geocoded to the **real suburb / postcode** you're standing in (OpenStreetMap Nominatim, no API key). That place *is* the zone: everyone in the same suburb hears the same track, and the song changes the moment you cross into the next suburb. Lookups are cached and rate-limited; if geocoding is unavailable it falls back to a coarse grid so the app still works everywhere on Earth. |
+| **Unique sound profiles worldwide** | Because the bandit state is per-zone and persisted, every suburb drifts toward its own local taste. The in-app world map plots every discovered place, coloured by its dominant mood. |
 
 ---
 
@@ -37,6 +37,11 @@ Open <http://localhost:5577>, allow location (or use **✈ Explore** / click the
 travel), and press play.
 
 > Requires Node ≥ 22.5 (uses the built-in `node:sqlite`). Tested on Node 24.
+>
+> Zones are real suburbs/postcodes via OpenStreetMap Nominatim (free, no key). The server
+> is a polite client of that service: one request at a time, ≥1.1s apart, every lookup
+> cached in the DB. Set `GEOCODE_CONTACT="you@example.com"` to identify your instance, or
+> `GEOCODE_PROVIDER=mock` for a fully offline deterministic geocoder (used by the tests).
 
 ---
 
@@ -61,11 +66,14 @@ JavaScript errors. It also writes `verify-shot.png`.
 
 ```
 server.js        HTTP server (node:http) + JSON API, serves ./public
-db.js            Persistence (node:sqlite): zones, per-arm Beta stats, vote log, history
+db.js            Persistence (node:sqlite): zones, per-arm Beta stats, vote log, history, geocache
 bandit.js        The ML core: dimensions/arms, Thompson sampling, vote updates, profile
-zones.js         lat/lon -> grid zone id + deterministic poetic zone name
+geocode.js       lat/lon -> real suburb/postcode zone (OSM Nominatim, cached + rate-limited)
+zones.js         hashStr helper + (legacy) grid zone id / poetic name
 sim.js           Offline proof that the bandit learns
 verify.mjs       Headless end-to-end UI check
+verify-travel.mjs  Headless proof the song auto-changes as you travel between places
+gtest.mjs        Live reverse-geocode sanity check (hits OSM; proves real suburb resolution)
 public/
   index.html     UI
   style.css      Ambient dark theme
@@ -75,7 +83,7 @@ public/
 
 ### API
 
-- `GET /api/zone?lat=&lon=` → `{ zoneId, name, center, currentTrack:{seed,genome}, stats, profile, maturity, global }`
+- `GET /api/zone?lat=&lon=` → `{ zoneId, name, label, center, currentTrack:{seed,genome}, stats, profile, maturity, global }` (`name` = suburb, `label` = postcode · locality · country)
 - `POST /api/vote` `{ zoneId, action:'next'|'prev'|'like'|'dislike' }` → updated zone payload
 - `GET /api/world` → `{ zones:[…], global }` for the map
 - `GET /api/dimensions` → the full arm space

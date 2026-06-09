@@ -43,15 +43,24 @@ export function openDb(path) {
       genome     TEXT,
       created_at INTEGER
     );
+    CREATE TABLE IF NOT EXISTS geocache (
+      cell       TEXT PRIMARY KEY,
+      payload    TEXT,
+      fetched_at INTEGER
+    );
     CREATE INDEX IF NOT EXISTS idx_arms_zone ON arms(zone_id);
     CREATE INDEX IF NOT EXISTS idx_votes_zone ON votes(zone_id);
   `);
 
+  // Migration: a zone now carries a human "label" (postcode · locality · country).
+  // ADD COLUMN throws if it already exists, so we just swallow that.
+  try { db.exec('ALTER TABLE zones ADD COLUMN label TEXT'); } catch {}
+
   const q = {
     getZone: db.prepare('SELECT * FROM zones WHERE id = ?'),
     insZone: db.prepare(
-      `INSERT INTO zones (id, lat, lon, name, created_at, updated_at, current_seed, current_genome, track_counter)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO zones (id, lat, lon, name, label, created_at, updated_at, current_seed, current_genome, track_counter)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ),
     updTrack: db.prepare(
       `UPDATE zones SET current_seed = ?, current_genome = ?, history = ?, track_counter = ?, updated_at = ? WHERE id = ?`,
@@ -70,6 +79,11 @@ export function openDb(path) {
     ),
     stats: db.prepare('SELECT COUNT(*) AS zones, COALESCE(SUM(plays),0) AS plays, COALESCE(SUM(upvotes),0) AS up, COALESCE(SUM(downvotes),0) AS down FROM zones'),
     voteCount: db.prepare('SELECT COUNT(*) AS n FROM votes'),
+    getGeo: db.prepare('SELECT payload FROM geocache WHERE cell = ?'),
+    putGeo: db.prepare(
+      `INSERT INTO geocache (cell, payload, fetched_at) VALUES (?, ?, ?)
+       ON CONFLICT(cell) DO UPDATE SET payload = excluded.payload, fetched_at = excluded.fetched_at`,
+    ),
   };
 
   // Build an in-memory cache of a zone's arms for fast Thompson sampling.
@@ -87,10 +101,19 @@ export function openDb(path) {
       return q.getZone.get(id) || null;
     },
 
-    createZone(id, lat, lon, name, seed, genomeJson) {
+    createZone(id, lat, lon, name, label, seed, genomeJson) {
       const now = Date.now();
-      q.insZone.run(id, lat, lon, name, now, now, seed, genomeJson, 1);
+      q.insZone.run(id, lat, lon, name, label || '', now, now, seed, genomeJson, 1);
       return q.getZone.get(id);
+    },
+
+    // Reverse-geocode cache: a fine ~150m cell -> resolved zone descriptor.
+    getGeocache(cell) {
+      const r = q.getGeo.get(cell);
+      return r ? JSON.parse(r.payload) : null;
+    },
+    putGeocache(cell, payload) {
+      q.putGeo.run(cell, JSON.stringify(payload), Date.now());
     },
 
     // Returns a getStat(dim,arm) closure backed by an in-memory snapshot.
