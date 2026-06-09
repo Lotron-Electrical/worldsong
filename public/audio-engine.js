@@ -179,6 +179,30 @@ export class WorldsongEngine {
     }
   }
 
+  // Smoothly cross-fade into a new zone's track while audio keeps playing:
+  // dip the master gain, swap the genome at the quietest point, then rise again.
+  // Falls back to a plain swap if we're not currently playing.
+  transition(genome, seed) {
+    if (!this.ctx || !this.playing) {
+      this.swap(genome, seed);
+      return;
+    }
+    const g = this.master.gain;
+    const t = this.ctx.currentTime;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(Math.max(0.0001, g.value), t);
+    g.linearRampToValueAtTime(0.04, t + 0.45);
+    clearTimeout(this._transTimer);
+    this._transTimer = setTimeout(() => {
+      this.swap(genome, seed);
+      const t2 = this.ctx.currentTime;
+      const g2 = this.master.gain;
+      g2.cancelScheduledValues(t2);
+      g2.setValueAtTime(0.04, t2);
+      g2.linearRampToValueAtTime(0.85, t2 + 0.95);
+    }, 460);
+  }
+
   _scaleNote(degree) {
     const g = this.genome;
     const sc = SCALES[g.scale] || SCALES.minor;

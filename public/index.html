@@ -32,7 +32,11 @@
           <div class="zonename" id="zoneName">Locating…</div>
           <div class="coords" id="coords">—</div>
         </div>
-        <button class="ghost" id="exploreBtn" title="Jump to a random place on Earth">✈ Explore</button>
+        <div class="locbtns">
+          <button class="ghost" id="followBtn" title="Follow your real location — the music changes automatically as you travel between places">📍 Follow</button>
+          <button class="ghost" id="tourBtn" title="Demo: auto-travel between cities so you can hear the music change without moving">🧭 Tour</button>
+          <button class="ghost" id="exploreBtn" title="Jump to a random place on Earth">✈ Explore</button>
+        </div>
       </div>
 
       <canvas id="viz" class="viz" width="900" height="200"></canvas>
@@ -51,7 +55,7 @@
         <button id="dislikeBtn" class="vote down" title="Downvote &amp; skip">👎 <span id="downCount">0</span></button>
       </div>
 
-      <div class="hint" id="hint">Press play. Going forward (⏭) rewards what this place should sound like; going back (⏮) teaches it what it should <em>not</em>.</div>
+      <div class="hint" id="hint">Press play, then travel: with <em>📍 Follow</em> on, the music changes automatically as you cross into a new place. Going forward (⏭) rewards what this place should sound like; going back (⏮) teaches it what it should <em>not</em>.</div>
     </section>
 
     <section class="profile card">

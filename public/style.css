@@ -77,6 +77,7 @@ main {
 .zonename { font-size: clamp(22px, 4vw, 34px); font-weight: 800; letter-spacing: .5px; }
 .coords { color: var(--dim); font-size: 13px; margin-top: 4px; font-variant-numeric: tabular-nums; }
 
+.locbtns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .ghost {
   background: transparent;
   border: 1px solid var(--line);
@@ -86,8 +87,16 @@ main {
   cursor: pointer;
   font-size: 14px;
   transition: .2s;
+  white-space: nowrap;
 }
 .ghost:hover { border-color: var(--acc); color: #fff; }
+.ghost.active {
+  border-color: var(--acc2);
+  color: #06121a;
+  background: linear-gradient(135deg, var(--acc2), var(--acc));
+  font-weight: 700;
+  box-shadow: 0 0 16px rgba(25, 211, 197, 0.4);
+}
 
 .viz {
   width: 100%;

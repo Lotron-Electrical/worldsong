@@ -77,14 +77,104 @@ function renderProfile(profile) {
   }
 }
 
+// ---------------------------------------------------------------- location/zones
+// Client-side copy of the server's grid quantization (zones.js). Lets us detect
+// when we've crossed into a NEW zone cell without hitting the API on every GPS tick.
+const GRID = 0.01;
+function localZoneId(lat, lon) {
+  lat = Math.max(-85, Math.min(85, Number(lat)));
+  lon = ((((Number(lon) + 180) % 360) + 360) % 360) - 180;
+  const clat = Math.round(lat / GRID) * GRID;
+  const clon = Math.round(lon / GRID) * GRID;
+  return `z_${clat.toFixed(2)}_${clon.toFixed(2)}`;
+}
+
+let currentZoneId = null; // the zone we're currently sitting in
+let liveTracking = false;
+let watchId = null;
+
 // ---------------------------------------------------------------- actions
-async function loadZone(lat, lon) {
+async function loadZone(lat, lon, opts = {}) {
   const p = await api(`/api/zone?lat=${lat}&lon=${lon}`);
+  const changed = p.zoneId !== currentZoneId;
+  currentZoneId = p.zoneId;
   renderZone(p);
-  engine.swap(p.currentTrack.genome, p.currentTrack.seed);
+  // Auto-transitions (travelling) cross-fade; manual loads while playing also
+  // cross-fade; when stopped we just preload the track.
+  if (playing) engine.transition(p.currentTrack.genome, p.currentTrack.seed);
+  else engine.swap(p.currentTrack.genome, p.currentTrack.seed);
   refreshWorld();
+  if (changed && opts.announce) toast(`📍 Entered ${p.name}`);
   return p;
 }
+
+// Only re-load when the user has actually crossed into a different zone cell.
+async function enterIfChanged(lat, lon, announce = false) {
+  const zid = localZoneId(lat, lon);
+  if (zid === currentZoneId) return; // same cell — leave the music alone
+  await loadZone(lat, lon, { announce }).catch((e) => toast('Server error: ' + e.message));
+}
+
+// ---- live GPS tracking: music follows you as you travel ----
+function updateFollowBtn() {
+  const b = $('followBtn');
+  if (!b) return;
+  b.classList.toggle('active', liveTracking);
+  b.textContent = liveTracking ? '📍 Following' : '📍 Follow';
+}
+
+function startTracking() {
+  if (!navigator.geolocation) { toast('Geolocation not available here.'); return; }
+  liveTracking = true;
+  updateFollowBtn();
+  if (watchId == null) {
+    watchId = navigator.geolocation.watchPosition(
+      (pos) => { if (liveTracking) enterIfChanged(pos.coords.latitude, pos.coords.longitude, true); },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 4000, timeout: 20000 },
+    );
+  }
+  toast('Following your location — the music will change as you travel.');
+}
+
+function stopTracking() {
+  liveTracking = false;
+  updateFollowBtn();
+}
+
+// ---- guided tour: simulate travelling between places (for desktop testing) ----
+const TOUR = [
+  { name: 'Tokyo', lat: 35.6762, lon: 139.6503 },
+  { name: 'Paris', lat: 48.8566, lon: 2.3522 },
+  { name: 'New York', lat: 40.7128, lon: -74.006 },
+  { name: 'Cairo', lat: 30.0444, lon: 31.2357 },
+  { name: 'Rio de Janeiro', lat: -22.9068, lon: -43.1729 },
+  { name: 'Reykjavik', lat: 64.1466, lon: -21.9426 },
+  { name: 'Sydney', lat: -33.8688, lon: 151.2093 },
+];
+let tourTimer = null;
+let tourIdx = 0;
+function updateTourBtn() {
+  const b = $('tourBtn');
+  if (b) { b.classList.toggle('active', !!tourTimer); b.textContent = tourTimer ? '🧭 Stop tour' : '🧭 Tour'; }
+}
+function toggleTour() {
+  if (tourTimer) { clearInterval(tourTimer); tourTimer = null; updateTourBtn(); toast('Tour stopped.'); return; }
+  stopTracking();
+  if (!playing) toast('Press ▶ to hear the music change as the tour travels.');
+  tourIdx = 0;
+  const step = () => {
+    const s = TOUR[tourIdx % TOUR.length];
+    tourIdx++;
+    loadZone(s.lat, s.lon, { announce: true }).catch((e) => toast('Server error: ' + e.message));
+  };
+  step();
+  tourTimer = setInterval(step, 7000);
+  updateTourBtn();
+}
+
+// dev/testing hook: simulate a GPS reading from the console or an automated test.
+window.__simPos = (lat, lon) => enterIfChanged(lat, lon, true);
 
 async function vote(action) {
   if (!zone) return;
@@ -225,7 +315,8 @@ $('worldmap').addEventListener('click', (e) => {
   const fy = (e.clientY - rect.top) / rect.height;
   const lon = fx * 360 - 180;
   const lat = 90 - fy * 180;
-  loadZone(lat.toFixed(4), lon.toFixed(4)).then(() => toast('Flew to a new place on Earth.'));
+  stopTracking(); // manual jump — stop following real GPS
+  loadZone(lat.toFixed(4), lon.toFixed(4), { announce: true }).then(() => toast('Flew to a new place on Earth.'));
 });
 
 // ---------------------------------------------------------------- wiring
@@ -235,21 +326,29 @@ $('prevBtn').addEventListener('click', () => vote('prev'));
 $('likeBtn').addEventListener('click', () => vote('like'));
 $('dislikeBtn').addEventListener('click', () => vote('dislike'));
 $('exploreBtn').addEventListener('click', () => {
-  // bias toward populated latitudes for nicer exploration
+  stopTracking(); // manual jump — stop following real GPS
   const lat = (Math.random() * 120 - 60);
   const lon = (Math.random() * 360 - 180);
-  loadZone(lat.toFixed(4), lon.toFixed(4)).then(() => toast('Exploring a random corner of the world.'));
+  loadZone(lat.toFixed(4), lon.toFixed(4), { announce: true }).then(() => toast('Exploring a random corner of the world.'));
 });
+$('followBtn').addEventListener('click', () => {
+  if (liveTracking) { stopTracking(); toast('Stopped following your location.'); }
+  else startTracking();
+});
+$('tourBtn').addEventListener('click', toggleTour);
 
 // ---------------------------------------------------------------- boot
 function boot() {
-  const fallback = () => loadZone(-37.8136, 144.9631).then(() => {
-    $('hint').textContent = 'Location unavailable — dropped you in Melbourne. Use ✈ Explore to travel.';
+  const fallback = () => loadZone(-37.8136, 144.9631, { announce: false }).then(() => {
+    $('hint').textContent = 'Location unavailable — dropped you in Melbourne. Use 🧭 Tour, ✈ Explore, or the map to travel.';
   }).catch((e) => toast('Server error: ' + e.message));
 
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
-      (pos) => loadZone(pos.coords.latitude, pos.coords.longitude).catch((e) => toast('Server error: ' + e.message)),
+      (pos) => {
+        enterIfChanged(pos.coords.latitude, pos.coords.longitude, false)
+          .then(() => startTracking()); // begin following as the user travels
+      },
       () => fallback(),
       { timeout: 6000 },
     );
