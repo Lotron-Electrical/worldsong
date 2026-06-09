@@ -114,6 +114,15 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   try {
+    // CORS — lets a standalone (Capacitor/EAS) build call this API from a
+    // different origin. The in-WebView app is same-origin so it doesn't need it.
+    if (url.pathname.startsWith('/api/')) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+    }
+
     if (url.pathname === '/api/zone' && req.method === 'GET') {
       const lat = parseFloat(url.searchParams.get('lat'));
       const lon = parseFloat(url.searchParams.get('lon'));

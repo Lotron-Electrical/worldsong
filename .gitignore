@@ -6,3 +6,11 @@ verify-shot.png
 sim.db*
 verify.db*
 server.log
+
+# mobile (Expo) build artifacts
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/android/
+mobile/ios/
+.expo/
