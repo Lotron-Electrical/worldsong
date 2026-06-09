@@ -20,7 +20,7 @@ it runs on Node's built-ins alone.
 |---|---|
 | **AI-generated music** | A procedural generative audio engine (Web Audio API) synthesises drums, bass, pads and lead from a parameter set called a *genome*. No samples, no streaming. |
 | **Machine learning from votes** | Each zone runs a **per-dimension Thompson-sampling multi-armed bandit**. Every musical choice (scale, tempo, instruments, drums, space, tone…) is an arm with a Beta(α,β) posterior. Upvotes bump α, downvotes bump β. The next track is sampled from the learned posteriors, so the zone exploits what's liked while still exploring. |
-| **Voting via next / previous** | ⏭ Next = downvote + skip to a freshly sampled track. ⏮ Previous = restore the prior track *and* upvote it. Explicit 👍 / 👎 are also wired in. |
+| **Voting via next / previous** | ⏭ Forward = upvote the current track *and* advance to a freshly sampled one. ⏮ Back = downvote the current track *and* return to the previous one. Explicit 👍 / 👎 are also wired in. |
 | **Location-dependent, shared** | Your browser's latitude/longitude is quantised to a ~1 km grid cell (a *zone*). The server holds the current track per zone, so everyone in that cell hears the same thing. |
 | **Unique sound profiles worldwide** | Because the bandit state is per-zone and persisted, every location drifts toward its own local taste. The in-app world map plots every discovered zone, coloured by its dominant mood. |
 

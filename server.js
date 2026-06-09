@@ -135,25 +135,34 @@ const server = http.createServer(async (req, res) => {
       const bump = (dim, arm, dA, dB) => db.bumpArm(zoneId, dim, arm, dA, dB);
 
       if (action === 'like') {
+        // upvote, keep the current track playing
         applyVote(currentGenome, +1, bump);
         db.recordVote(zoneId, zone.current_seed, +1, zone.current_genome);
-        // track unchanged
-      } else if (action === 'next' || action === 'dislike') {
+      } else if (action === 'next') {
+        // forward = UPVOTE the current track, then advance to a fresh one
+        applyVote(currentGenome, +1, bump);
+        db.recordVote(zoneId, zone.current_seed, +1, zone.current_genome);
+        history.push({ seed: zone.current_seed, genome: currentGenome });
+        const ng = regenerate(zone); // reads stats AFTER the upvote -> biased toward it
+        db.setTrack(zoneId, ng.seed, JSON.stringify(ng.genome), history, ng.counter);
+      } else if (action === 'dislike') {
+        // explicit downvote + skip to a fresh track
         applyVote(currentGenome, -1, bump);
         db.recordVote(zoneId, zone.current_seed, -1, zone.current_genome);
         history.push({ seed: zone.current_seed, genome: currentGenome });
-        const ng = regenerate(zone); // reads stats AFTER the downvote
+        const ng = regenerate(zone);
         db.setTrack(zoneId, ng.seed, JSON.stringify(ng.genome), history, ng.counter);
       } else if (action === 'prev') {
+        // back = DOWNVOTE the current track, then return to the previous one
+        applyVote(currentGenome, -1, bump);
+        db.recordVote(zoneId, zone.current_seed, -1, zone.current_genome);
         if (history.length) {
           const prev = history.pop();
-          applyVote(prev.genome, +1, bump);
-          db.recordVote(zoneId, prev.seed, +1, JSON.stringify(prev.genome));
           db.setTrack(zoneId, prev.seed, JSON.stringify(prev.genome), history, zone.track_counter);
         } else {
-          // nothing earlier — treat as an upvote of the current track
-          applyVote(currentGenome, +1, bump);
-          db.recordVote(zoneId, zone.current_seed, +1, zone.current_genome);
+          // nothing earlier to go back to — downvote stands; advance to a fresh track
+          const ng = regenerate(zone);
+          db.setTrack(zoneId, ng.seed, JSON.stringify(ng.genome), history, ng.counter);
         }
       } else {
         return send(res, 400, { error: 'bad action' });

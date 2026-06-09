@@ -97,9 +97,9 @@ async function vote(action) {
   // next / prev / dislike change the track; like keeps it.
   if (action !== 'like') engine.swap(p.currentTrack.genome, p.currentTrack.seed);
   const msg = {
-    next: 'Skipped — this place learned what it should not sound like.',
-    dislike: 'Downvoted — generating a new direction…',
-    prev: 'Brought back & upvoted the previous track.',
+    next: 'Upvoted — moving forward to a new track in this vein.',
+    dislike: 'Downvoted — skipping to a new direction…',
+    prev: 'Downvoted — going back to the previous track.',
     like: 'Upvoted — reinforcing this sound here.',
   }[action];
   toast(msg);
