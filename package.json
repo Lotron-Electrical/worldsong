@@ -1,0 +1,12 @@
+{
+  "name": "worldsong",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Location-based, vote-evolved AI-generated music. Every place on Earth grows its own song.",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node server.js",
+    "sim": "node sim.js"
+  }
+}

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Worldsong — the music of where you are</title>
+  <meta name="description" content="Every place on Earth grows its own song, shaped by everyone who has ever listened there." />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>" />
+</head>
+<body>
+  <div class="aurora"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="globe">🌍</span>
+      <div>
+        <h1>WORLDSONG</h1>
+        <p class="tag">the music of where you are</p>
+      </div>
+    </div>
+    <div class="globalstats" id="globalStats">
+      <span title="zones discovered">— zones</span>
+      <span title="votes cast">— votes</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="player card">
+      <div class="loc">
+        <div class="locleft">
+          <div class="zonename" id="zoneName">Locating…</div>
+          <div class="coords" id="coords">—</div>
+        </div>
+        <button class="ghost" id="exploreBtn" title="Jump to a random place on Earth">✈ Explore</button>
+      </div>
+
+      <canvas id="viz" class="viz" width="900" height="200"></canvas>
+
+      <div class="transport">
+        <button id="prevBtn" class="tbtn" title="Previous — bring back &amp; upvote the last track">⏮</button>
+        <button id="playBtn" class="tbtn play" title="Play / Pause">▶</button>
+        <button id="nextBtn" class="tbtn" title="Next — skip &amp; downvote this track">⏭</button>
+      </div>
+      <div class="votes">
+        <button id="likeBtn" class="vote up" title="Upvote — keep this sound">👍 <span id="upCount">0</span></button>
+        <div class="maturity">
+          <div class="mlabel">zone maturity</div>
+          <div class="mbar"><div class="mfill" id="matFill"></div></div>
+        </div>
+        <button id="dislikeBtn" class="vote down" title="Downvote &amp; skip">👎 <span id="downCount">0</span></button>
+      </div>
+
+      <div class="hint" id="hint">Press play. Skipping (⏭) teaches this place what it should <em>not</em> sound like; going back (⏮) rewards what it should.</div>
+    </section>
+
+    <section class="profile card">
+      <h2>Sound profile of <span id="profileZone">this place</span></h2>
+      <p class="sub">What everyone here has voted this location to sound like. The bars show how settled each choice is.</p>
+      <div class="chips" id="profileChips"></div>
+    </section>
+
+    <section class="world card">
+      <h2>The world is listening</h2>
+      <p class="sub">Each dot is a place that has grown its own song. Colour = dominant mood. Click one to fly there.</p>
+      <canvas id="worldmap" class="worldmap" width="900" height="420"></canvas>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

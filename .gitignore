@@ -1,0 +1,8 @@
+node_modules/
+*.db
+*.db-wal
+*.db-shm
+verify-shot.png
+sim.db*
+verify.db*
+server.log
