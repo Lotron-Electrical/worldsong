@@ -1,0 +1,8 @@
+# Files not needed in the EAS Build upload archive.
+node_modules/
+.expo/
+dist/
+dist-check/
+web-build/
+*.log
+worldsong-qr.png
