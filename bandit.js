@@ -18,17 +18,49 @@ export const DIMENSIONS = {
     'mixolydian', 'pentatonic_major', 'pentatonic_minor', 'blues', 'harmonic_minor',
   ],
   root: ['C', 'D', 'Eb', 'E', 'F', 'G', 'A', 'Bb'],
-  tempo: ['60', '72', '84', '96', '110', '124', '138'], // BPM buckets (strings = arm ids)
-  lead: ['sine_pluck', 'triangle_lead', 'saw_lead', 'square_arp', 'bell', 'fm_bell', 'none'],
-  pad: ['warm_pad', 'glass_pad', 'strings', 'choir', 'none'],
-  bass: ['sub', 'saw_bass', 'pulse_bass', 'none'],
-  drums: ['none', 'soft_kick', 'four_floor', 'downtempo', 'trip_hop'],
+  tempo: ['60', '72', '84', '96', '110', '124', '138', '150', '165', '174'], // BPM buckets (strings = arm ids)
+  lead: ['sine_pluck', 'triangle_lead', 'saw_lead', 'square_arp', 'bell', 'fm_bell', 'super_saw', 'screech', 'none'],
+  pad: ['warm_pad', 'glass_pad', 'strings', 'choir', 'stab', 'none'],
+  bass: ['sub', 'saw_bass', 'pulse_bass', 'wobble_bass', 'growl_bass', 'reese_bass', 'none'],
+  drums: ['none', 'soft_kick', 'four_floor', 'downtempo', 'trip_hop', 'dnb', 'breakbeat', 'half_time'],
   density: ['sparse', 'medium', 'busy'],
   reverb: ['dry', 'room', 'hall', 'cathedral'],
   brightness: ['dark', 'neutral', 'bright'],
 };
 
 export const DIMENSION_KEYS = Object.keys(DIMENSIONS);
+
+// ---------------------------------------------------------------------------
+// House style prior: "Redline Dash" (Skrillex). A fresh zone starts every arm
+// at the uniform Beta(1,1) prior, which would make its first tracks a random
+// grab-bag. To give the whole app a deliberate sonic identity, we add an alpha
+// head-start to the arms that make up an aggressive, fast, distorted bass-music
+// sound: detuned/wobble/Reese basses, drum-and-bass + breakbeat drums, 150-174
+// BPM, screaming saw/screech leads, dark scales, tight (dry) space, bright tone.
+//
+// This is a PRIOR, not a lock: it just makes Thompson sampling reach for these
+// arms first. Real votes still accumulate on top, so a zone whose listeners hate
+// the wobble can still drift somewhere else over time. Bumping/clearing this
+// object re-styles the planet without touching any stored votes.
+// ---------------------------------------------------------------------------
+export const STYLE_PRIOR = {
+  scale:      { phrygian: 3, minor: 3, harmonic_minor: 2 },
+  root:       { E: 2, D: 1, G: 1 },
+  tempo:      { '174': 4, '165': 4, '150': 3, '138': 1 },
+  lead:       { super_saw: 4, screech: 3, saw_lead: 2 },
+  pad:        { none: 3, stab: 2 },
+  bass:       { reese_bass: 4, growl_bass: 4, wobble_bass: 3 },
+  drums:      { dnb: 4, breakbeat: 4, half_time: 3 },
+  density:    { busy: 3, medium: 1 },
+  reverb:     { dry: 3, room: 2 },
+  brightness: { bright: 3, neutral: 1 },
+};
+
+// The Beta prior for an arm before any votes: 1 + its style head-start.
+export function defaultStat(dim, arm) {
+  const boost = (STYLE_PRIOR[dim] && STYLE_PRIOR[dim][arm]) || 0;
+  return { alpha: 1 + boost, beta: 1 };
+}
 
 // ---------------------------------------------------------------------------
 // Deterministic PRNG (mulberry32) so the same seed yields the same music for

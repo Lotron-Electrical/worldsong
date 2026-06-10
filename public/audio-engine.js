@@ -37,7 +37,24 @@ const DRUMS = {
   four_floor: { kick: [0, 4, 8, 12], hat: [2, 6, 10, 14], snare: [4, 12] },
   downtempo: { kick: [0, 10], hat: [4, 7, 12, 14], snare: [8] },
   trip_hop: { kick: [0, 10], hat: [2, 6, 9, 12, 14], snare: [8] },
+  // Hard, fast bass-music kits. `hard: true` makes the kick/snare hit harder.
+  dnb: { kick: [0, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14], hard: true },
+  breakbeat: { kick: [0, 6, 10], snare: [4, 12], hat: [2, 3, 7, 9, 11, 14, 15], hard: true },
+  half_time: { kick: [0, 7], snare: [8], hat: [0, 2, 4, 6, 8, 10, 12, 14], hard: true },
 };
+
+// Soft-clip waveshaper curve. Higher k = more grit/saturation. Reused across
+// voices (the same Float32Array can back many WaveShaperNodes) so distorted
+// bass and screeching leads cost no per-note allocation.
+function makeDistCurve(k) {
+  const n = 1024;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+  }
+  return curve;
+}
 
 export class WorldsongEngine {
   constructor() {
@@ -81,7 +98,16 @@ export class WorldsongEngine {
     this.analyser.fftSize = 1024;
     this.analyser.smoothingTimeConstant = 0.8;
 
-    // melodic bus -> brightness filter -> dry + reverb -> master -> analyser -> out
+    // Brick-wall-ish limiter on the way out: distorted wobble bass + screech
+    // leads + hard drums stack up fast, so we tame peaks instead of clipping.
+    this.limiter = ctx.createDynamicsCompressor();
+    this.limiter.threshold.value = -6;
+    this.limiter.knee.value = 6;
+    this.limiter.ratio.value = 12;
+    this.limiter.attack.value = 0.003;
+    this.limiter.release.value = 0.18;
+
+    // melodic bus -> brightness filter -> dry + reverb -> master -> limiter -> analyser -> out
     this.bus = ctx.createGain();
     this.bus.connect(this.bright);
     this.bright.connect(this.dry);
@@ -90,8 +116,19 @@ export class WorldsongEngine {
     this.conv.connect(this.wet);
     this.wet.connect(this.master);
 
-    this.master.connect(this.analyser);
+    this.master.connect(this.limiter);
+    this.limiter.connect(this.analyser);
     this.analyser.connect(ctx.destination);
+
+    // Precomputed saturation curves, shared by every distorted voice.
+    this._curves = {
+      reese: makeDistCurve(14),
+      bass: makeDistCurve(22),
+      growl: makeDistCurve(20),
+      saw: makeDistCurve(16),
+      screech: makeDistCurve(30),
+      stab: makeDistCurve(10),
+    };
 
     this.noise = this._noiseBuffer();
   }
@@ -215,6 +252,7 @@ export class WorldsongEngine {
   _scheduler() {
     const ctx = this.ctx;
     const bpm = parseInt(this.genome.tempo, 10) || 96;
+    this._bpm = bpm; // voices read this to tempo-sync the wobble LFO
     const stepDur = (60 / bpm) / 4; // 16th note
     while (this._nextTime < ctx.currentTime + 0.14) {
       this._playStep(this._step, this._nextTime, stepDur);
@@ -241,16 +279,19 @@ export class WorldsongEngine {
 
     // ---- drums ----
     const pat = DRUMS[g.drums] || DRUMS.none;
-    if (pat.kick.includes(s)) this._kick(time);
+    const hard = !!pat.hard;
+    if (pat.kick.includes(s)) this._kick(time, hard);
     if (pat.hat.includes(s)) this._hat(time);
-    if (pat.snare.includes(s)) this._snare(time);
+    if (pat.snare.includes(s)) this._snare(time, hard);
 
     // ---- bass: on kick hits (or beat 0/8) ----
     if (g.bass !== 'none') {
       const beats = pat.kick.length ? pat.kick : [0, 8];
       if (beats.includes(s)) {
         const note = this._scaleNote(chordDeg) - 24; // two octaves down
-        this._bass(note, time, stepDur * 3.5);
+        const aggressive = g.bass === 'wobble_bass' || g.bass === 'growl_bass' || g.bass === 'reese_bass';
+        // Aggressive basses sustain longer so the LFO has room to wobble/growl.
+        this._bass(note, time, stepDur * (aggressive ? 6 : 3.5));
       }
     }
 
@@ -278,9 +319,39 @@ export class WorldsongEngine {
 
   _lead(freq, time, dur) {
     const ctx = this.ctx;
+    const lead = this.genome.lead;
+
+    // ---- aggressive saw leads: a detuned stack through a waveshaper, into the
+    // bright bus. super_saw = wide screaming chord-of-one-note; screech adds a
+    // resonant bandpass + a quick upward pitch bite (the classic Skrillex squeal).
+    if (lead === 'super_saw' || lead === 'screech') {
+      const g = ctx.createGain();
+      this._env(g, time, 0.008, 0.2, dur);
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = lead === 'screech' ? this._curves.screech : this._curves.saw;
+      shaper.oversample = '2x';
+      const tone = ctx.createBiquadFilter();
+      tone.type = lead === 'screech' ? 'bandpass' : 'lowpass';
+      tone.frequency.value = lead === 'screech' ? Math.min(freq * 3, 9000) : 3500;
+      tone.Q.value = lead === 'screech' ? 6 : 1;
+      for (const det of [-16, 0, 16]) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = freq;
+        o.detune.value = det;
+        if (lead === 'screech') {
+          o.frequency.setValueAtTime(freq * 0.92, time);
+          o.frequency.linearRampToValueAtTime(freq, time + Math.min(0.12, dur));
+        }
+        o.connect(shaper);
+        o.start(time); o.stop(time + dur + 0.1);
+      }
+      shaper.connect(tone).connect(g).connect(this.bus);
+      return;
+    }
+
     const g = ctx.createGain();
     const o = ctx.createOscillator();
-    const lead = this.genome.lead;
     if (lead === 'bell' || lead === 'fm_bell') {
       o.type = 'sine';
       const mod = ctx.createOscillator();
@@ -301,6 +372,32 @@ export class WorldsongEngine {
 
   _pad(midis, time, dur) {
     const ctx = this.ctx;
+
+    // ---- stab: a short, distorted saw chord accent (not a sustained pad) ----
+    if (this.genome.pad === 'stab') {
+      const stabDur = Math.min(dur, 0.18);
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = this._curves.stab; shaper.oversample = '2x';
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 2600; lp.Q.value = 2;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, time);
+      g.gain.exponentialRampToValueAtTime(0.16, time + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.001, time + stabDur);
+      for (const m of midis) {
+        for (const det of [-7, 7]) {
+          const o = ctx.createOscillator();
+          o.type = 'sawtooth';
+          o.frequency.value = mtof(m);
+          o.detune.value = det;
+          o.connect(lp);
+          o.start(time); o.stop(time + stabDur + 0.05);
+        }
+      }
+      lp.connect(shaper).connect(g).connect(this.bus);
+      return;
+    }
+
     const padType = { warm_pad: 'sawtooth', glass_pad: 'triangle', strings: 'sawtooth', choir: 'sine' }[this.genome.pad] || 'sawtooth';
     for (const m of midis) {
       for (const det of [-5, 5]) {
@@ -323,29 +420,94 @@ export class WorldsongEngine {
 
   _bass(midi, time, dur) {
     const ctx = this.ctx;
-    const type = { sub: 'sine', saw_bass: 'sawtooth', pulse_bass: 'square' }[this.genome.bass] || 'sine';
-    const o = ctx.createOscillator();
+    const kind = this.genome.bass;
+    const f0 = mtof(midi);
     const g = ctx.createGain();
+    this._env(g, time, 0.02, 0.34, dur);
+
+    // ---- aggressive bass family: detuned saws -> resonant lowpass swept by an
+    // LFO (the "wub"/"growl") -> waveshaper grit. This is the Skrillex/DnB core.
+    if (kind === 'wobble_bass' || kind === 'growl_bass' || kind === 'reese_bass') {
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.Q.value = kind === 'reese_bass' ? 6 : 11;
+      lp.frequency.value = kind === 'reese_bass' ? 900 : 240;
+
+      // LFO sweeps the cutoff. Rate is tempo-synced: wobble slow, growl fast,
+      // Reese none (it's a static detuned drone, not a wob).
+      const beat = 60 / (this._bpm || 150);
+      const cyclesPerBeat = kind === 'wobble_bass' ? 1 : kind === 'growl_bass' ? 3 : 0;
+      if (cyclesPerBeat > 0) {
+        const lfo = ctx.createOscillator();
+        const ld = ctx.createGain();
+        lfo.type = 'sine';
+        lfo.frequency.value = cyclesPerBeat / beat;
+        ld.gain.value = kind === 'growl_bass' ? 1100 : 1500; // sweep depth (Hz)
+        lfo.connect(ld).connect(lp.frequency);
+        lfo.start(time); lfo.stop(time + dur + 0.05);
+      }
+
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = kind === 'reese_bass' ? this._curves.reese
+        : kind === 'growl_bass' ? this._curves.growl : this._curves.bass;
+      shaper.oversample = '2x';
+
+      // Detuned saw stack for thickness (Reese = several saws beating together).
+      const dets = kind === 'reese_bass' ? [-14, -7, 7, 14] : [-8, 8];
+      for (const det of dets) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = f0;
+        o.detune.value = det;
+        o.connect(lp);
+        o.start(time); o.stop(time + dur + 0.05);
+      }
+
+      // A clean sub sine underneath keeps the low end solid on phone speakers.
+      const sub = ctx.createOscillator();
+      const subg = ctx.createGain();
+      sub.type = 'sine'; sub.frequency.value = f0 / 2; subg.gain.value = 0.6;
+      sub.connect(subg).connect(g);
+      sub.start(time); sub.stop(time + dur + 0.05);
+
+      lp.connect(shaper).connect(g).connect(this.master);
+      return;
+    }
+
+    // ---- classic clean basses (sub / saw / pulse) ----
+    const type = { sub: 'sine', saw_bass: 'sawtooth', pulse_bass: 'square' }[kind] || 'sine';
+    const o = ctx.createOscillator();
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass'; lp.frequency.value = 400;
     o.type = type;
-    o.frequency.value = mtof(midi);
-    this._env(g, time, 0.02, 0.34, dur);
+    o.frequency.value = f0;
     o.connect(lp).connect(g).connect(this.master); // bass goes mostly dry for punch
     o.start(time); o.stop(time + dur + 0.05);
   }
 
-  _kick(time) {
+  _kick(time, hard) {
     const ctx = this.ctx;
     const o = ctx.createOscillator();
     const g = ctx.createGain();
     o.type = 'sine';
-    o.frequency.setValueAtTime(120, time);
-    o.frequency.exponentialRampToValueAtTime(45, time + 0.12);
-    g.gain.setValueAtTime(0.9, time);
-    g.gain.exponentialRampToValueAtTime(0.001, time + 0.25);
+    o.frequency.setValueAtTime(hard ? 165 : 120, time);
+    o.frequency.exponentialRampToValueAtTime(hard ? 42 : 45, time + (hard ? 0.1 : 0.12));
+    g.gain.setValueAtTime(hard ? 1.0 : 0.9, time);
+    g.gain.exponentialRampToValueAtTime(0.001, time + (hard ? 0.22 : 0.25));
     o.connect(g).connect(this.master);
     o.start(time); o.stop(time + 0.3);
+    // Hard kicks get a high-passed noise click on the attack for punch.
+    if (hard) {
+      const c = ctx.createBufferSource();
+      c.buffer = this.noise;
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass'; hp.frequency.value = 1200;
+      const cg = ctx.createGain();
+      cg.gain.setValueAtTime(0.5, time);
+      cg.gain.exponentialRampToValueAtTime(0.001, time + 0.02);
+      c.connect(hp).connect(cg).connect(this.master);
+      c.start(time); c.stop(time + 0.03);
+    }
   }
 
   _hat(time) {
@@ -362,17 +524,29 @@ export class WorldsongEngine {
     src.start(time); src.stop(time + 0.08);
   }
 
-  _snare(time) {
+  _snare(time, hard) {
     const ctx = this.ctx;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.8;
+    bp.type = 'bandpass'; bp.frequency.value = hard ? 2200 : 1800; bp.Q.value = hard ? 0.6 : 0.8;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, time);
-    g.gain.exponentialRampToValueAtTime(0.4, time + 0.005);
-    g.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
+    g.gain.exponentialRampToValueAtTime(hard ? 0.6 : 0.4, time + (hard ? 0.003 : 0.005));
+    g.gain.exponentialRampToValueAtTime(0.001, time + (hard ? 0.15 : 0.18));
     src.connect(bp).connect(g).connect(this.master);
     src.start(time); src.stop(time + 0.2);
+    // Hard snares add a quick tonal body so they crack instead of just hiss.
+    if (hard) {
+      const o = ctx.createOscillator();
+      const og = ctx.createGain();
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(330, time);
+      o.frequency.exponentialRampToValueAtTime(180, time + 0.08);
+      og.gain.setValueAtTime(0.3, time);
+      og.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
+      o.connect(og).connect(this.master);
+      o.start(time); o.stop(time + 0.12);
+    }
   }
 }

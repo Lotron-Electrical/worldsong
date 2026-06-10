@@ -22,7 +22,7 @@ const db = openDb(TMP);
 const ID = 'z_sim';
 const seed0 = db.seedFor(ID, 1);
 const g0 = sampleGenome(db.statReader(ID), seed0);
-db.createZone(ID, 0, 0, 'Sim Zone', seed0, JSON.stringify(g0));
+db.createZone(ID, 0, 0, 'Sim Zone', '', seed0, JSON.stringify(g0));
 
 // Hidden crowd preference.
 const TARGET = { scale: 'minor', tempo: '84', drums: 'trip_hop', lead: 'fm_bell', pad: 'warm_pad' };

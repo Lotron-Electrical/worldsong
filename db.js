@@ -5,6 +5,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { hashStr } from './zones.js';
+import { defaultStat } from './bandit.js';
 
 const HISTORY_MAX = 30;
 
@@ -117,9 +118,18 @@ export function openDb(path) {
     },
 
     // Returns a getStat(dim,arm) closure backed by an in-memory snapshot.
+    // The house-style prior (defaultStat) is folded in as a permanent baseline:
+    // an arm with no votes starts at its style prior, and once votes exist we add
+    // the style head-start on top of the stored Beta(1,1)-based counts. That keeps
+    // the "Redline Dash" identity present even after a zone has been voted on.
     statReader(zoneId) {
       const cache = armCache(zoneId);
-      return (dim, arm) => cache.get(`${dim}|${arm}`) || { alpha: 1, beta: 1 };
+      return (dim, arm) => {
+        const base = defaultStat(dim, arm);
+        const stored = cache.get(`${dim}|${arm}`);
+        if (!stored) return base;
+        return { alpha: stored.alpha + (base.alpha - 1), beta: stored.beta };
+      };
     },
 
     // Persist arm increments for a vote.

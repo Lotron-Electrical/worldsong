@@ -3,6 +3,7 @@ import { WorldsongEngine } from './audio-engine.js';
 
 const $ = (id) => document.getElementById(id);
 const engine = new WorldsongEngine();
+window.__worldsongEngine = engine; // diagnostics hook (read analyser / genome in tests)
 
 let zone = null;       // last /api/zone payload
 let playing = false;
