@@ -21,7 +21,7 @@ it runs on Node's built-ins alone.
 | **AI-generated music** | A procedural generative audio engine (Web Audio API) synthesises drums, bass, pads and lead from a parameter set called a *genome*. No samples, no streaming. |
 | **Machine learning from votes** | Each zone runs a **per-dimension Thompson-sampling multi-armed bandit**. Every musical choice (scale, tempo, instruments, drums, space, tone…) is an arm with a Beta(α,β) posterior. Upvotes bump α, downvotes bump β. The next track is sampled from the learned posteriors, so the zone exploits what's liked while still exploring. |
 | **Voting via next / previous** | ⏭ Forward = upvote the current track *and* advance to a freshly sampled one. ⏮ Back = downvote the current track *and* return to the previous one. Explicit 👍 / 👎 are also wired in. |
-| **Location-dependent, shared** | Your latitude/longitude is reverse-geocoded to the **real suburb / postcode** you're standing in (OpenStreetMap Nominatim, no API key). That place *is* the zone: everyone in the same suburb hears the same track, and the song changes the moment you cross into the next suburb. Lookups are cached and rate-limited; if geocoding is unavailable it falls back to a coarse grid so the app still works everywhere on Earth. |
+| **Location-dependent, shared** | Your latitude/longitude is reverse-geocoded to the **real suburb / postcode** you're standing in (OpenStreetMap via Photon, no API key). That place *is* the zone: everyone in the same suburb hears the same track, and the song changes the moment you cross into the next suburb. Lookups are cached and rate-limited; if geocoding is unavailable it falls back to a coarse grid so the app still works everywhere on Earth. |
 | **Unique sound profiles worldwide** | Because the bandit state is per-zone and persisted, every suburb drifts toward its own local taste. The in-app world map plots every discovered place, coloured by its dominant mood. |
 
 ---
@@ -38,10 +38,14 @@ travel), and press play.
 
 > Requires Node ≥ 22.5 (uses the built-in `node:sqlite`). Tested on Node 24.
 >
-> Zones are real suburbs/postcodes via OpenStreetMap Nominatim (free, no key). The server
-> is a polite client of that service: one request at a time, ≥1.1s apart, every lookup
-> cached in the DB. Set `GEOCODE_CONTACT="you@example.com"` to identify your instance, or
-> `GEOCODE_PROVIDER=mock` for a fully offline deterministic geocoder (used by the tests).
+> Zones are real suburbs/postcodes via free OpenStreetMap reverse geocoding (no key). The
+> default provider is **Photon** (Komoot), because the public Nominatim instance blocks
+> datacenter IPs and silently fails on cloud hosts; Nominatim is kept as a secondary that
+> works from a home IP. The server is a polite client: one request at a time, ≥1.1s apart,
+> every resolved lookup cached in the DB (the coarse "Uncharted" fallback is never cached,
+> so a transient outage can't poison a cell). Set `GEOCODE_CONTACT="you@example.com"` to
+> identify your instance; `GEOCODE_PROVIDER=mock` forces a fully offline deterministic
+> geocoder (used by the tests), or set it to `photon`/`nominatim` to pin one provider.
 
 ---
 
