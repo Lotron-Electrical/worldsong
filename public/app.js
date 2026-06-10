@@ -11,14 +11,46 @@ let playing = false;
 // ------------------------------------------------ car / steering-wheel controls
 // The generative music comes from the Web Audio engine, which on its own does NOT
 // register a system media session — so a car's Bluetooth/steering-wheel buttons
-// (and the lock-screen controls) have nothing to talk to. We hold a session open
-// with a looping *silent* audio clip (full volume, not muted, so the OS treats it
-// as active media) and map the hardware track buttons to Worldsong's voting:
+// (and the lock-screen controls) have nothing to talk to. We map the hardware
+// track buttons to Worldsong's voting:
 //   next  ⏭  -> up the track   (vote 'next'  = upvote + advance to a new track)
 //   prev  ⏮  -> down the track (vote 'prev'  = downvote + go back)
 // This is exactly the polarity of the in-app ⏭/⏮ buttons, so the wheel feels like
 // Spotify but it's also teaching the per-suburb model what you like.
+//
+// There are two ways the session is owned, depending on where the app runs:
+//   • Plain web / PWA: we hold the W3C MediaSession open with a looping *silent*
+//     audio clip and answer its action handlers (best the browser can do).
+//   • Native app (Expo shell, window.__NATIVE_GPS): react-native-track-player owns
+//     a real Android MediaSession in a foreground service. It grabs audio focus
+//     (so Spotify pauses), shows the track on the car dash, and forwards the
+//     hardware buttons in here by calling window.__worldsongRemote.*. We expose
+//     that bridge and push "now playing" info out via ReactNativeWebView so the
+//     native layer can keep the dash metadata current.
+const NATIVE = typeof window !== 'undefined' && !!window.__NATIVE_GPS;
 let silence = null;
+
+// The hardware-control bridge the native shell calls (and the web handlers reuse).
+window.__worldsongRemote = {
+  next: () => vote('next'),
+  prev: () => vote('prev'),
+  play: () => { if (!playing) togglePlay(); },
+  pause: () => { if (playing) togglePlay(); },
+  toggle: () => togglePlay(),
+};
+
+// Tell the native shell what's playing so it can show it on the car dash.
+function postNowPlaying() {
+  if (!NATIVE || !window.ReactNativeWebView || !zone) return;
+  try {
+    window.ReactNativeWebView.postMessage('worldsong:nowplaying:' + JSON.stringify({
+      title: zone.name,
+      artist: 'Worldsong',
+      album: zone.label || 'The song of where you are',
+      playing,
+    }));
+  } catch {}
+}
 
 // 1 second of digital silence as a WAV object URL (no binary asset needed).
 function makeSilenceUrl() {
@@ -34,6 +66,9 @@ function makeSilenceUrl() {
 }
 
 function ensureMediaSession() {
+  // In the native app, react-native-track-player owns the session — don't open a
+  // second (silent) one in the WebView or it would fight RNTP for audio focus.
+  if (NATIVE) return;
   if (!('mediaSession' in navigator)) return;
   if (!silence) {
     silence = new Audio(makeSilenceUrl());
@@ -51,6 +86,7 @@ function ensureMediaSession() {
 
 // Show the current suburb on the car screen / lock screen, like a track title.
 function updateMediaMetadata() {
+  postNowPlaying(); // native dash
   if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined' || !zone) return;
   navigator.mediaSession.metadata = new MediaMetadata({
     title: zone.name,
@@ -296,6 +332,7 @@ async function togglePlay() {
     playing = false;
     $('playBtn').textContent = '▶';
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    postNowPlaying(); // let the native dash reflect the paused state
   }
 }
 

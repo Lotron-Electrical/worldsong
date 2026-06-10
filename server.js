@@ -38,6 +38,8 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
+  '.wav': 'audio/wav',
+  '.png': 'image/png',
 };
 
 function serveStatic(req, res) {
