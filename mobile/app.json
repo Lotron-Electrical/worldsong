@@ -18,7 +18,16 @@
     },
     "android": {
       "package": "dev.worldsong.app",
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#07080f",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -55,6 +64,9 @@
     },
     "updates": {
       "url": "https://u.expo.dev/fe48a187-6ddb-4952-a356-d266d60229f1"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }
