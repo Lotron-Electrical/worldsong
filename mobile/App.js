@@ -23,37 +23,66 @@ export default function App() {
 
   const webRef = useRef(null);
   const watchRef = useRef(null);
+  const lastPosRef = useRef(null);   // most recent {lat, lon} we've seen
+  const pageReadyRef = useRef(false); // has the web page told us it's listening?
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
 
-  // Push a coordinate into the web app.
+  // Push a coordinate into the web app (and remember it so we can re-send later).
   const feed = useCallback((lat, lon) => {
+    lastPosRef.current = { lat, lon };
     if (!webRef.current) return;
     webRef.current.injectJavaScript(
       `window.__worldsongFeedPosition && window.__worldsongFeedPosition(${lat}, ${lon}); true;`,
     );
   }, []);
 
+  // Re-send the last known fix — used when the page finishes loading or signals
+  // that its position hook is now installed (covers the race where the first GPS
+  // fix lands before the WebView has defined window.__worldsongFeedPosition).
+  const flush = useCallback(() => {
+    const p = lastPosRef.current;
+    if (p) feed(p.lat, p.lon);
+  }, [feed]);
+
   useEffect(() => {
     let mounted = true;
+    let bridge = null;
     (async () => {
       try {
+        const enabled = await Location.hasServicesEnabledAsync();
+        if (!enabled) {
+          setError('Location (GPS) is turned off on your phone. Switch it on in your settings, then reopen Worldsong.');
+          return;
+        }
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
           setError('Location permission is needed so the music can match where you are. Enable it in Settings and reopen Worldsong.');
           return;
         }
+
         // Fast initial fix so the first song loads quickly…
         try {
           const first = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
           if (mounted) feed(first.coords.latitude, first.coords.longitude);
         } catch { /* the watcher below will catch up */ }
 
-        // …then stream updates as you move (every ~25m or 4s).
+        // …then stream updates. distanceInterval: 0 means we keep getting fixes on
+        // a timer even when you're standing still (a parked car, a red light, the
+        // couch) — the old 25 m filter meant a stationary phone never updated at all.
         watchRef.current = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, distanceInterval: 25, timeInterval: 4000 },
-          (pos) => feed(pos.coords.latitude, pos.coords.longitude),
+          { accuracy: Location.Accuracy.High, distanceInterval: 0, timeInterval: 3000 },
+          (pos) => { if (mounted) feed(pos.coords.latitude, pos.coords.longitude); },
         );
+
+        // Bridge the load race: re-push the latest fix every 2s for the first ~24s,
+        // until the page confirms it's listening. After that the watcher carries it.
+        let ticks = 0;
+        bridge = setInterval(() => {
+          ticks += 1;
+          if (pageReadyRef.current || ticks > 12) { clearInterval(bridge); bridge = null; return; }
+          flush();
+        }, 2000);
       } catch (e) {
         setError(String((e && e.message) || e));
       }
@@ -61,8 +90,18 @@ export default function App() {
     return () => {
       mounted = false;
       if (watchRef.current) watchRef.current.remove();
+      if (bridge) clearInterval(bridge);
     };
-  }, [feed]);
+  }, [feed, flush]);
+
+  // The web page posts "worldsong:ready" once its position hook is installed.
+  const onMessage = useCallback((e) => {
+    const data = (e && e.nativeEvent && e.nativeEvent.data) || '';
+    if (data.indexOf('worldsong:ready') !== -1) {
+      pageReadyRef.current = true;
+      flush();
+    }
+  }, [flush]);
 
   return (
     <View style={styles.root}>
@@ -72,7 +111,8 @@ export default function App() {
         source={{ uri: SITE_URL }}
         style={styles.web}
         injectedJavaScriptBeforeContentLoaded={PRE_INJECT}
-        onLoadEnd={() => setReady(true)}
+        onLoadEnd={() => { setReady(true); flush(); }}
+        onMessage={onMessage}
         onError={(e) => setError((e && e.nativeEvent && e.nativeEvent.description) || 'Could not reach Worldsong. Check your connection.')}
         mediaPlaybackRequiresUserAction={false}
         allowsInlineMediaPlayback

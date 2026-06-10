@@ -7,6 +7,57 @@ const engine = new WorldsongEngine();
 let zone = null;       // last /api/zone payload
 let playing = false;
 
+// ------------------------------------------------ car / steering-wheel controls
+// The generative music comes from the Web Audio engine, which on its own does NOT
+// register a system media session — so a car's Bluetooth/steering-wheel buttons
+// (and the lock-screen controls) have nothing to talk to. We hold a session open
+// with a looping *silent* audio clip (full volume, not muted, so the OS treats it
+// as active media) and map the hardware track buttons to Worldsong's voting:
+//   next  ⏭  -> up the track   (vote 'next'  = upvote + advance to a new track)
+//   prev  ⏮  -> down the track (vote 'prev'  = downvote + go back)
+// This is exactly the polarity of the in-app ⏭/⏮ buttons, so the wheel feels like
+// Spotify but it's also teaching the per-suburb model what you like.
+let silence = null;
+
+// 1 second of digital silence as a WAV object URL (no binary asset needed).
+function makeSilenceUrl() {
+  const sr = 8000, n = sr;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const dv = new DataView(buf);
+  const s = (o, str) => { for (let i = 0; i < str.length; i++) dv.setUint8(o + i, str.charCodeAt(i)); };
+  s(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); s(8, 'WAVE');
+  s(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  s(36, 'data'); dv.setUint32(40, n * 2, true); // samples already zero == silence
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+function ensureMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  if (!silence) {
+    silence = new Audio(makeSilenceUrl());
+    silence.loop = true;
+    silence.volume = 1; // silent *content*, not muted, so it counts as active media
+  }
+  const ms = navigator.mediaSession;
+  const set = (action, fn) => { try { ms.setActionHandler(action, fn); } catch {} };
+  set('nexttrack', () => vote('next'));      // steering wheel: up the track
+  set('previoustrack', () => vote('prev'));  // steering wheel: down the track
+  set('play', () => { if (!playing) togglePlay(); });
+  set('pause', () => { if (playing) togglePlay(); });
+  set('stop', () => { if (playing) togglePlay(); });
+}
+
+// Show the current suburb on the car screen / lock screen, like a track title.
+function updateMediaMetadata() {
+  if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined' || !zone) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: zone.name,
+    artist: 'Worldsong',
+    album: zone.label || 'The song of where you are',
+  });
+}
+
 // ---------------------------------------------------------------- helpers
 function toast(msg) {
   const t = $('toast');
@@ -56,6 +107,7 @@ function renderZone(p) {
       `<span>${p.global.zones} zones</span><span>${p.global.votes} votes</span>`;
   }
   renderProfile(p.profile);
+  updateMediaMetadata(); // keep the car/lock-screen "now playing" on the current suburb
 }
 
 const DIM_LABELS = {
@@ -229,14 +281,20 @@ async function vote(action) {
 
 async function togglePlay() {
   if (!playing) {
+    ensureMediaSession();              // arm the car / lock-screen controls
     await engine.start();
+    if (silence) { try { await silence.play(); } catch {} } // hold the media session open
     playing = true;
     $('playBtn').textContent = '⏸';
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    updateMediaMetadata();
     drawViz();
   } else {
     engine.stop();
+    if (silence) silence.pause();
     playing = false;
     $('playBtn').textContent = '▶';
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   }
 }
 
@@ -374,11 +432,13 @@ function boot() {
     $('hint').textContent = 'Location unavailable — dropped you in Melbourne. Use 🧭 Tour, ✈ Explore, or the map to travel.';
   }).catch((e) => toast('Server error: ' + e.message));
 
-  // Native app: positions are fed in via __worldsongFeedPosition. Start in
-  // following mode; if no fix arrives shortly, drop a sensible default.
+  // Native app: positions are fed in via __worldsongFeedPosition. Tell the native
+  // shell our hook is installed so it can flush the latest fix straight away, start
+  // in following mode, and only drop a default if no real fix arrives in time.
   if (window.__NATIVE_GPS) {
+    try { window.ReactNativeWebView && window.ReactNativeWebView.postMessage('worldsong:ready'); } catch {}
     startTracking();
-    setTimeout(() => { if (!currentZoneId) fallback(); }, 8000);
+    setTimeout(() => { if (!currentZoneId) fallback(); }, 12000);
     refreshWorld();
     return;
   }
