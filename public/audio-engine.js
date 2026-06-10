@@ -1,9 +1,15 @@
 // audio-engine.js — Worldsong's generative music engine (Web Audio API).
 //
-// Given a "genome" (one arm per musical dimension) and a seed, it synthesises an
-// endless, evolving piece entirely in the browser — no samples, no external libs.
-// The seed makes the melody deterministic, so two listeners in the same zone hear
-// the same music. Drums, bass, pads and lead are all built from oscillators/noise.
+// Given a "genome" (one arm per musical dimension) and a seed, it composes a
+// full ~2-3 minute piece with structure (intro, themes, variation, a bridge,
+// an outro) that then loops — like a RuneScape area theme — entirely in the
+// browser, no samples or external libs. The seed makes the composition
+// deterministic, so two listeners in the same zone hear the same music.
+//
+// House aesthetic = calm medieval/fantasy: flute & recorder, harp, pizzicato
+// strings, soft bells/glockenspiel, warm pads, light hand percussion, lush
+// reverb, mid tempos. The older aggressive bass-music voices remain as arms a
+// zone can still drift toward, but the style prior (bandit.js) leans fantasy.
 
 const SCALES = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -31,13 +37,19 @@ function mulberry32(seed) {
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
 // Drum patterns over a 16-step bar. Each entry: which 16th-steps fire.
+// `soft: true` = light hand percussion (woody kick, gentle shaker/clap).
+// `hard: true` = the aggressive bass-music kits (harder kick/snare).
 const DRUMS = {
   none: { kick: [], hat: [], snare: [] },
-  soft_kick: { kick: [0, 8], hat: [4, 12], snare: [] },
+  soft_kick: { kick: [0, 8], hat: [4, 12], snare: [], soft: true },
   four_floor: { kick: [0, 4, 8, 12], hat: [2, 6, 10, 14], snare: [4, 12] },
   downtempo: { kick: [0, 10], hat: [4, 7, 12, 14], snare: [8] },
   trip_hop: { kick: [0, 10], hat: [2, 6, 9, 12, 14], snare: [8] },
-  // Hard, fast bass-music kits. `hard: true` makes the kick/snare hit harder.
+  // Light, organic hand percussion for the fantasy palette.
+  hand_drum: { kick: [0, 6, 8, 14], snare: [], hat: [4, 12], soft: true },
+  tambourine: { kick: [0, 8], snare: [], hat: [2, 4, 6, 10, 12, 14], soft: true },
+  light_perc: { kick: [0, 8], snare: [4, 12], hat: [2, 6, 10, 14], soft: true },
+  // Hard, fast bass-music kits.
   dnb: { kick: [0, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14], hard: true },
   breakbeat: { kick: [0, 6, 10], snare: [4, 12], hat: [2, 3, 7, 9, 11, 14, 15], hard: true },
   half_time: { kick: [0, 7], snare: [8], hat: [0, 2, 4, 6, 8, 10, 12, 14], hard: true },
@@ -64,9 +76,12 @@ export class WorldsongEngine {
     this.seed = 1;
     this.analyser = null;
     this._timer = null;
-    this._step = 0;
+    this._pos = 0;          // absolute 16th-note position within the composition
+    this._comp = null;      // the built composition (array of bars)
+    this._compSteps = 0;    // total 16th steps in the loop
+    this._bpm = 96;
     this._nextTime = 0;
-    this.onStep = null; // optional callback(step) for visuals
+    this.onStep = null;     // optional callback(stepWithinBar) for visuals
   }
 
   async ensureCtx() {
@@ -98,8 +113,8 @@ export class WorldsongEngine {
     this.analyser.fftSize = 1024;
     this.analyser.smoothingTimeConstant = 0.8;
 
-    // Brick-wall-ish limiter on the way out: distorted wobble bass + screech
-    // leads + hard drums stack up fast, so we tame peaks instead of clipping.
+    // Gentle output limiter: most fantasy material sits well below it, but the
+    // aggressive arms (if a zone drifts there) still stack up, so we tame peaks.
     this.limiter = ctx.createDynamicsCompressor();
     this.limiter.threshold.value = -6;
     this.limiter.knee.value = 6;
@@ -157,6 +172,7 @@ export class WorldsongEngine {
   load(genome, seed) {
     this.genome = genome;
     this.seed = (seed >>> 0) || 1;
+    this._buildComposition();
     if (this.ctx) this._applyGenome();
   }
 
@@ -187,8 +203,8 @@ export class WorldsongEngine {
     this.master.gain.cancelScheduledValues(ctx.currentTime);
     this.master.gain.setValueAtTime(Math.max(0.0001, this.master.gain.value), ctx.currentTime);
     this.master.gain.linearRampToValueAtTime(0.85, ctx.currentTime + 1.2);
-    this._rng = mulberry32(this.seed);
-    this._step = 0;
+    if (!this._comp) this._buildComposition();
+    this._pos = 0;
     this._nextTime = ctx.currentTime + 0.12;
     this._timer = setInterval(() => this._scheduler(), 25);
   }
@@ -206,12 +222,11 @@ export class WorldsongEngine {
     }
   }
 
-  // Reseed melody/voices for a brand-new track without tearing down the context.
+  // Recompose for a brand-new track without tearing down the context.
   swap(genome, seed) {
     this.load(genome, seed);
     if (this.ctx) {
-      this._rng = mulberry32(this.seed);
-      this._step = 0;
+      this._pos = 0;
       this._applyGenome();
     }
   }
@@ -249,62 +264,184 @@ export class WorldsongEngine {
     return base + sc[idx] + 12 * oct;
   }
 
+  // ---------------------------------------------------------------------------
+  // Composition. Instead of looping a single 4-bar phrase forever, we build a
+  // full piece up-front from the seed: a main theme (A), a contrasting theme
+  // (B), and a form that states them, varies them with ornamentation, drops to
+  // a sparse bridge, and resolves — ~2-3 minutes that then loops seamlessly.
+  // The whole melody is pregenerated as note events so it's a real, repeatable,
+  // hummable tune (not a fresh random arpeggio each bar), and so the loop point
+  // is identical every time round.
+  // ---------------------------------------------------------------------------
+  _buildComposition() {
+    const rng = mulberry32((this.seed ^ 0x9e3779b9) >>> 0);
+    const clampDeg = (d) => Math.max(0, Math.min(9, d));
+    const nearestDeg = (cur, tones) => {
+      let best = tones[0], bd = Infinity;
+      for (const t of tones) { const dd = Math.abs(t - cur); if (dd < bd) { bd = dd; best = t; } }
+      return clampDeg(best);
+    };
+
+    // Chord progressions as scale-degree roots (diatonic, pleasant cadences).
+    const PROGS = [
+      [0, 4, 5, 3], [0, 5, 3, 4], [0, 3, 4, 4],
+      [5, 3, 0, 4], [0, 2, 5, 4], [0, 4, 1, 5],
+    ];
+    const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+    const progA = pick(PROGS);
+    let progB = pick(PROGS);
+    if (progB === progA) progB = PROGS[(PROGS.indexOf(progA) + 3) % PROGS.length];
+
+    // Melodic rhythms over a 16-step bar (which steps a note can land on).
+    const RHYTHMS = [
+      [0, 4, 8, 12],
+      [0, 4, 6, 8, 12],
+      [0, 3, 6, 8, 12, 14],
+      [0, 4, 8, 10, 12],
+      [0, 2, 4, 8, 12],
+    ];
+
+    // Generate an 8-bar singable phrase against a 4-chord progression. Strong
+    // beats snap to chord tones; weaker beats step gently through the scale;
+    // the final bar resolves to the tonic so the loop feels complete.
+    const genTheme = (prog, rhythmIdx, startDeg) => {
+      const bars = [];
+      let deg = startDeg;
+      for (let b = 0; b < 8; b++) {
+        const chord = prog[b % prog.length];
+        const rhythm = RHYTHMS[rhythmIdx % RHYTHMS.length];
+        const notes = [];
+        for (let i = 0; i < rhythm.length; i++) {
+          const step = rhythm[i];
+          const strong = step === 0 || step === 8 || i === 0;
+          if (strong) {
+            deg = nearestDeg(deg, [chord, chord + 2, chord + 4]);
+          } else {
+            const moves = [-2, -1, -1, 0, 1, 1, 2];
+            deg = clampDeg(deg + moves[Math.floor(rng() * moves.length)]);
+          }
+          notes.push({ step, deg });
+        }
+        if (b === 7 && notes.length) notes[notes.length - 1].deg = prog[0]; // cadence
+        bars.push(notes);
+      }
+      return bars;
+    };
+
+    // Variation: weave passing notes between wider melodic leaps.
+    const ornament = (theme) => theme.map((bar) => {
+      const out = [];
+      for (let i = 0; i < bar.length; i++) {
+        out.push(bar[i]);
+        const next = bar[i + 1];
+        if (next && next.step - bar[i].step >= 3 && rng() < 0.5) {
+          out.push({
+            step: bar[i].step + Math.floor((next.step - bar[i].step) / 2),
+            deg: clampDeg(bar[i].deg + (next.deg >= bar[i].deg ? 1 : -1)),
+          });
+        }
+      }
+      return out;
+    });
+
+    const slice = (theme, start, count) => theme.slice(start, start + count);
+
+    const themeA = genTheme(progA, Math.floor(rng() * RHYTHMS.length), 4);
+    const themeB = genTheme(progB, Math.floor(rng() * RHYTHMS.length), 5);
+
+    // The form: intro · A · A(ornamented) · B · A · bridge · B(ornamented) · A(ornamented) · outro.
+    // Sparse sections (intro/bridge/outro) drop the drums and use a sparkling
+    // override instrument (harp / glockenspiel) so the piece breathes.
+    const sections = [
+      { theme: slice(themeA, 0, 4), prog: progA, drums: false, octave: 0,  lead: 'harp',         pad: true, soft: true },
+      { theme: themeA,              prog: progA, drums: true,  octave: 0,  lead: null,           pad: true, soft: false },
+      { theme: ornament(themeA),    prog: progA, drums: true,  octave: 0,  lead: null,           pad: true, soft: false },
+      { theme: themeB,              prog: progB, drums: true,  octave: 0,  lead: null,           pad: true, soft: false },
+      { theme: themeA,              prog: progA, drums: true,  octave: 0,  lead: null,           pad: true, soft: false },
+      { theme: slice(themeB, 0, 4), prog: progB, drums: false, octave: 12, lead: 'glockenspiel', pad: true, soft: true },
+      { theme: ornament(themeB),    prog: progB, drums: true,  octave: 0,  lead: null,           pad: true, soft: false },
+      { theme: ornament(themeA),    prog: progA, drums: true,  octave: 0,  lead: null,           pad: true, soft: false },
+      { theme: slice(themeA, 0, 4), prog: progA, drums: false, octave: 0,  lead: 'harp',         pad: true, soft: true },
+    ];
+
+    const flat = [];
+    for (const sec of sections) {
+      for (let b = 0; b < sec.theme.length; b++) {
+        flat.push({
+          chord: sec.prog[b % sec.prog.length],
+          notes: sec.theme[b],
+          drums: sec.drums,
+          octave: sec.octave,
+          lead: sec.lead,
+          pad: sec.pad,
+          soft: sec.soft,
+        });
+      }
+    }
+    this._comp = flat;        // 60 bars
+    this._compSteps = flat.length * 16;
+  }
+
   _scheduler() {
     const ctx = this.ctx;
     const bpm = parseInt(this.genome.tempo, 10) || 96;
     this._bpm = bpm; // voices read this to tempo-sync the wobble LFO
     const stepDur = (60 / bpm) / 4; // 16th note
+    if (!this._comp) this._buildComposition();
     while (this._nextTime < ctx.currentTime + 0.14) {
-      this._playStep(this._step, this._nextTime, stepDur);
-      if (this.onStep) try { this.onStep(this._step); } catch {}
+      this._playStep(this._pos, this._nextTime, stepDur);
+      if (this.onStep) try { this.onStep(this._pos % 16); } catch {}
       this._nextTime += stepDur;
-      this._step = (this._step + 1) % 64; // 4-bar loop
+      this._pos++;
+      if (this._pos >= this._compSteps) this._pos = 0; // loop the whole piece
     }
   }
 
-  _playStep(step, time, stepDur) {
+  _playStep(pos, time, stepDur) {
     const g = this.genome;
-    const bar = Math.floor(step / 16);
-    const s = step % 16;
+    if (!this._comp || !this._comp.length) return;
+    const bar = this._comp[Math.floor(pos / 16) % this._comp.length];
+    const s = pos % 16;
+    const chordDeg = bar.chord;
 
-    // Chord root degree per bar — a simple, pleasant progression.
-    const prog = [0, 5, 3, 4];
-    const chordDeg = prog[bar % 4];
-
-    // ---- pad: sustain a chord at the top of each bar ----
-    if (s === 0 && g.pad !== 'none') {
+    // ---- pad: sustain a chord across the bar ----
+    if (s === 0 && g.pad !== 'none' && bar.pad) {
       const chord = [chordDeg, chordDeg + 2, chordDeg + 4].map((d) => this._scaleNote(d));
       this._pad(chord, time, stepDur * 16 * 1.05);
     }
 
-    // ---- drums ----
+    // ---- drums (only in the sections that carry them) ----
     const pat = DRUMS[g.drums] || DRUMS.none;
-    const hard = !!pat.hard;
-    if (pat.kick.includes(s)) this._kick(time, hard);
-    if (pat.hat.includes(s)) this._hat(time);
-    if (pat.snare.includes(s)) this._snare(time, hard);
+    if (bar.drums) {
+      const hard = !!pat.hard;
+      const soft = !!pat.soft;
+      if (pat.kick.includes(s)) this._kick(time, hard, soft);
+      if (pat.hat.includes(s)) this._hat(time, soft);
+      if (pat.snare.includes(s)) this._snare(time, hard, soft);
+    }
 
-    // ---- bass: on kick hits (or beat 0/8) ----
+    // ---- bass: on the kick beats while drumming, else a gentle root per bar ----
     if (g.bass !== 'none') {
-      const beats = pat.kick.length ? pat.kick : [0, 8];
+      const beats = bar.drums && pat.kick.length ? pat.kick : [0];
       if (beats.includes(s)) {
         const note = this._scaleNote(chordDeg) - 24; // two octaves down
         const aggressive = g.bass === 'wobble_bass' || g.bass === 'growl_bass' || g.bass === 'reese_bass';
-        // Aggressive basses sustain longer so the LFO has room to wobble/growl.
-        this._bass(note, time, stepDur * (aggressive ? 6 : 3.5));
+        // Aggressive basses sustain longer so the LFO has room to wobble/growl;
+        // gentle basses are shorter so they don't muddy the melody.
+        const mult = aggressive ? 6 : g.bass === 'sub' ? 4 : 3;
+        this._bass(note, time, stepDur * mult);
       }
     }
 
-    // ---- lead: arpeggio / melody from the chord + scale ----
+    // ---- lead: play the pregenerated melodic line for this bar ----
     if (g.lead !== 'none') {
-      const densityEvery = { sparse: 4, medium: 2, busy: 1 }[g.density] || 2;
-      const prob = { sparse: 0.5, medium: 0.7, busy: 0.92 }[g.density] || 0.7;
-      if (s % densityEvery === 0 && this._rng() < prob) {
-        const tones = [chordDeg, chordDeg + 2, chordDeg + 4, chordDeg + 7, chordDeg + 1];
-        const deg = tones[Math.floor(this._rng() * tones.length)];
-        const midi = this._scaleNote(deg + 7); // up an octave for the lead range
-        const dur = stepDur * (g.density === 'busy' ? 1.3 : 2.2);
-        this._lead(mtof(midi), time, dur);
+      const inst = bar.lead || g.lead;
+      for (const no of bar.notes) {
+        if (no.step === s) {
+          const midi = this._scaleNote(no.deg) + 12 + bar.octave; // lead register
+          const dur = stepDur * (bar.soft ? 3.2 : 2.0);
+          this._lead(mtof(midi), time, dur, inst);
+        }
       }
     }
   }
@@ -317,13 +454,13 @@ export class WorldsongEngine {
     g.gain.exponentialRampToValueAtTime(0.0008, time + dur);
   }
 
-  _lead(freq, time, dur) {
+  _lead(freq, time, dur, inst) {
     const ctx = this.ctx;
-    const lead = this.genome.lead;
+    const lead = inst || this.genome.lead;
 
     // ---- aggressive saw leads: a detuned stack through a waveshaper, into the
     // bright bus. super_saw = wide screaming chord-of-one-note; screech adds a
-    // resonant bandpass + a quick upward pitch bite (the classic Skrillex squeal).
+    // resonant bandpass + a quick upward pitch bite (the classic squeal).
     if (lead === 'super_saw' || lead === 'screech') {
       const g = ctx.createGain();
       this._env(g, time, 0.008, 0.2, dur);
@@ -350,6 +487,75 @@ export class WorldsongEngine {
       return;
     }
 
+    // ---- flute / recorder: breathy sustained wind with gentle vibrato ----
+    if (lead === 'flute' || lead === 'recorder') {
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, time);
+      g.gain.linearRampToValueAtTime(0.2, time + 0.05);
+      g.gain.setValueAtTime(0.2, time + dur * 0.6);
+      g.gain.exponentialRampToValueAtTime(0.0008, time + dur);
+      const o = ctx.createOscillator();
+      o.type = lead === 'recorder' ? 'triangle' : 'sine';
+      o.frequency.value = freq;
+      const vib = ctx.createOscillator();
+      const vg = ctx.createGain();
+      vib.type = 'sine'; vib.frequency.value = 5; vg.gain.value = freq * 0.006;
+      vib.connect(vg).connect(o.frequency);
+      vib.start(time); vib.stop(time + dur + 0.1);
+      if (lead === 'flute') {
+        // a whisper of breath gives the flute its air
+        const br = ctx.createBufferSource();
+        br.buffer = this.noise;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass'; bp.frequency.value = Math.min(freq * 2, 6000); bp.Q.value = 1;
+        const bg = ctx.createGain(); bg.gain.value = 0.012;
+        br.connect(bp).connect(bg).connect(this.bus);
+        br.start(time); br.stop(time + dur);
+      }
+      o.connect(g).connect(this.bus);
+      o.start(time); o.stop(time + dur + 0.1);
+      return;
+    }
+
+    // ---- harp / pizzicato: plucked strings ----
+    if (lead === 'harp' || lead === 'pizzicato') {
+      const g = ctx.createGain();
+      const peak = lead === 'harp' ? 0.26 : 0.22;
+      const dec = lead === 'harp' ? Math.min(dur, 0.9) : 0.2;
+      g.gain.setValueAtTime(0.0001, time);
+      g.gain.exponentialRampToValueAtTime(peak, time + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0006, time + dec);
+      const o = ctx.createOscillator();
+      o.type = lead === 'harp' ? 'triangle' : 'sawtooth';
+      o.frequency.value = freq;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = lead === 'harp' ? 3500 : 2200;
+      lp.Q.value = lead === 'pizzicato' ? 2 : 0.7;
+      o.connect(lp).connect(g).connect(this.bus);
+      o.start(time); o.stop(time + dec + 0.1);
+      return;
+    }
+
+    // ---- glockenspiel: a bright, shimmering bell (inharmonic partials) ----
+    if (lead === 'glockenspiel') {
+      const g = ctx.createGain();
+      const dec = Math.min(dur, 1.0);
+      g.gain.setValueAtTime(0.0001, time);
+      g.gain.exponentialRampToValueAtTime(0.22, time + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0006, time + dec);
+      for (const [mult, amp] of [[1, 1], [3.01, 0.4], [5.4, 0.18]]) {
+        const o = ctx.createOscillator();
+        const og = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = freq * mult; og.gain.value = amp;
+        o.connect(og).connect(g);
+        o.start(time); o.stop(time + dec + 0.1);
+      }
+      g.connect(this.bus);
+      return;
+    }
+
+    // ---- bells + simple oscillator leads ----
     const g = ctx.createGain();
     const o = ctx.createOscillator();
     if (lead === 'bell' || lead === 'fm_bell') {
@@ -426,15 +632,13 @@ export class WorldsongEngine {
     this._env(g, time, 0.02, 0.34, dur);
 
     // ---- aggressive bass family: detuned saws -> resonant lowpass swept by an
-    // LFO (the "wub"/"growl") -> waveshaper grit. This is the Skrillex/DnB core.
+    // LFO (the "wub"/"growl") -> waveshaper grit. The DnB/Skrillex core.
     if (kind === 'wobble_bass' || kind === 'growl_bass' || kind === 'reese_bass') {
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
       lp.Q.value = kind === 'reese_bass' ? 6 : 11;
       lp.frequency.value = kind === 'reese_bass' ? 900 : 240;
 
-      // LFO sweeps the cutoff. Rate is tempo-synced: wobble slow, growl fast,
-      // Reese none (it's a static detuned drone, not a wob).
       const beat = 60 / (this._bpm || 150);
       const cyclesPerBeat = kind === 'wobble_bass' ? 1 : kind === 'growl_bass' ? 3 : 0;
       if (cyclesPerBeat > 0) {
@@ -442,7 +646,7 @@ export class WorldsongEngine {
         const ld = ctx.createGain();
         lfo.type = 'sine';
         lfo.frequency.value = cyclesPerBeat / beat;
-        ld.gain.value = kind === 'growl_bass' ? 1100 : 1500; // sweep depth (Hz)
+        ld.gain.value = kind === 'growl_bass' ? 1100 : 1500;
         lfo.connect(ld).connect(lp.frequency);
         lfo.start(time); lfo.stop(time + dur + 0.05);
       }
@@ -452,7 +656,6 @@ export class WorldsongEngine {
         : kind === 'growl_bass' ? this._curves.growl : this._curves.bass;
       shaper.oversample = '2x';
 
-      // Detuned saw stack for thickness (Reese = several saws beating together).
       const dets = kind === 'reese_bass' ? [-14, -7, 7, 14] : [-8, 8];
       for (const det of dets) {
         const o = ctx.createOscillator();
@@ -463,7 +666,6 @@ export class WorldsongEngine {
         o.start(time); o.stop(time + dur + 0.05);
       }
 
-      // A clean sub sine underneath keeps the low end solid on phone speakers.
       const sub = ctx.createOscillator();
       const subg = ctx.createGain();
       sub.type = 'sine'; sub.frequency.value = f0 / 2; subg.gain.value = 0.6;
@@ -474,26 +676,34 @@ export class WorldsongEngine {
       return;
     }
 
-    // ---- classic clean basses (sub / saw / pulse) ----
-    const type = { sub: 'sine', saw_bass: 'sawtooth', pulse_bass: 'square' }[kind] || 'sine';
+    // ---- clean basses: sub sine, saw, pulse, or a soft plucked finger-bass ----
+    const type = { sub: 'sine', saw_bass: 'sawtooth', pulse_bass: 'square', pluck_bass: 'triangle' }[kind] || 'sine';
     const o = ctx.createOscillator();
     const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass'; lp.frequency.value = 400;
+    lp.type = 'lowpass'; lp.frequency.value = kind === 'pluck_bass' ? 700 : 400;
     o.type = type;
     o.frequency.value = f0;
     o.connect(lp).connect(g).connect(this.master); // bass goes mostly dry for punch
     o.start(time); o.stop(time + dur + 0.05);
   }
 
-  _kick(time, hard) {
+  _kick(time, hard, soft) {
     const ctx = this.ctx;
     const o = ctx.createOscillator();
     const g = ctx.createGain();
     o.type = 'sine';
-    o.frequency.setValueAtTime(hard ? 165 : 120, time);
-    o.frequency.exponentialRampToValueAtTime(hard ? 42 : 45, time + (hard ? 0.1 : 0.12));
-    g.gain.setValueAtTime(hard ? 1.0 : 0.9, time);
-    g.gain.exponentialRampToValueAtTime(0.001, time + (hard ? 0.22 : 0.25));
+    if (soft) {
+      // woody hand-drum / soft tom thump
+      o.frequency.setValueAtTime(190, time);
+      o.frequency.exponentialRampToValueAtTime(90, time + 0.09);
+      g.gain.setValueAtTime(0.5, time);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
+    } else {
+      o.frequency.setValueAtTime(hard ? 165 : 120, time);
+      o.frequency.exponentialRampToValueAtTime(hard ? 42 : 45, time + (hard ? 0.1 : 0.12));
+      g.gain.setValueAtTime(hard ? 1.0 : 0.9, time);
+      g.gain.exponentialRampToValueAtTime(0.001, time + (hard ? 0.22 : 0.25));
+    }
     o.connect(g).connect(this.master);
     o.start(time); o.stop(time + 0.3);
     // Hard kicks get a high-passed noise click on the attack for punch.
@@ -510,29 +720,32 @@ export class WorldsongEngine {
     }
   }
 
-  _hat(time) {
+  _hat(time, soft) {
     const ctx = this.ctx;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass'; hp.frequency.value = 7000;
+    hp.type = 'highpass'; hp.frequency.value = soft ? 6000 : 7000;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, time);
-    g.gain.exponentialRampToValueAtTime(0.22, time + 0.005);
-    g.gain.exponentialRampToValueAtTime(0.0006, time + 0.06);
+    g.gain.exponentialRampToValueAtTime(soft ? 0.1 : 0.22, time + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0006, time + (soft ? 0.05 : 0.06));
     src.connect(hp).connect(g).connect(this.master);
     src.start(time); src.stop(time + 0.08);
   }
 
-  _snare(time, hard) {
+  _snare(time, hard, soft) {
     const ctx = this.ctx;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass'; bp.frequency.value = hard ? 2200 : 1800; bp.Q.value = hard ? 0.6 : 0.8;
+    bp.type = 'bandpass';
+    bp.frequency.value = hard ? 2200 : soft ? 1600 : 1800;
+    bp.Q.value = hard ? 0.6 : 0.8;
     const g = ctx.createGain();
+    const peak = hard ? 0.6 : soft ? 0.16 : 0.4;
     g.gain.setValueAtTime(0.0001, time);
-    g.gain.exponentialRampToValueAtTime(hard ? 0.6 : 0.4, time + (hard ? 0.003 : 0.005));
+    g.gain.exponentialRampToValueAtTime(peak, time + (hard ? 0.003 : 0.005));
     g.gain.exponentialRampToValueAtTime(0.001, time + (hard ? 0.15 : 0.18));
     src.connect(bp).connect(g).connect(this.master);
     src.start(time); src.stop(time + 0.2);

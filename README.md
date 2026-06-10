@@ -3,8 +3,11 @@
 **The music of where you are.** Every place on Earth grows its own song, shaped by
 everyone who has ever listened there.
 
-Worldsong plays endless, AI-generated music that is tied to your physical location, like
-the zone music in a video game. Two people standing in the same place hear the same track.
+Worldsong plays AI-generated music that is tied to your physical location, like
+the zone music in a video game. Each place gets its own full ~2-3 minute area
+theme (intro, recurring melodies, a variation, a sparse bridge, an outro) that
+then loops, in the spirit of a RuneScape town soundtrack. Two people standing in
+the same place hear the same track.
 You steer it by voting: skip (⏭) a track to teach the place what it should *not* sound like,
 go back (⏮) to reward what it should. Over time, each location on Earth evolves its own
 distinct sound profile.
@@ -18,7 +21,7 @@ it runs on Node's built-ins alone.
 
 | Requirement | How Worldsong does it |
 |---|---|
-| **AI-generated music** | A procedural generative audio engine (Web Audio API) synthesises drums, bass, pads and lead from a parameter set called a *genome*. No samples, no streaming. The palette runs aggressive: LFO-swept distorted **wobble / growl / Reese basses**, hard **drum-and-bass / breakbeat** kits up to 174 BPM, and screaming **super-saw / screech** leads, all through an out-of-the-box limiter. |
+| **AI-generated music** | A procedural generative audio engine (Web Audio API) composes a full ~2-3 minute piece, with structure (intro, themes, variation, bridge, outro) that loops, from a parameter set called a *genome*. No samples, no streaming. The default palette is a calm RuneScape-style fantasy feel: **flute & recorder, harp, pizzicato strings, glockenspiel** over **warm pads**, soft **plucked / sub bass**, **light hand percussion**, mid tempos and lush hall reverb. The older aggressive voices (wobble / Reese bass, drum-and-bass kits, super-saw / screech leads) are still in the vocabulary, so a zone can drift there if its listeners vote it that way. |
 | **Machine learning from votes** | Each zone runs a **per-dimension Thompson-sampling multi-armed bandit**. Every musical choice (scale, tempo, instruments, drums, space, tone…) is an arm with a Beta(α,β) posterior. Upvotes bump α, downvotes bump β. The next track is sampled from the learned posteriors, so the zone exploits what's liked while still exploring. |
 | **Voting via next / previous** | ⏭ Forward = upvote the current track *and* advance to a freshly sampled one. ⏮ Back = downvote the current track *and* return to the previous one. Explicit 👍 / 👎 are also wired in. |
 | **Location-dependent, shared** | Your latitude/longitude is reverse-geocoded to the **real suburb / postcode** you're standing in (OpenStreetMap via Photon, no API key). That place *is* the zone: everyone in the same suburb hears the same track, and the song changes the moment you cross into the next suburb. Lookups are cached and rate-limited; if geocoding is unavailable it falls back to a coarse grid so the app still works everywhere on Earth. |
@@ -98,13 +101,20 @@ One arm chosen per dimension: `scale, root, tempo, lead, pad, bass, drums, densi
 brightness`. The audio engine reads the genome and the seed (the seed makes the melody
 reproducible so a zone sounds identical for every listener).
 
-**House style ("Redline Dash").** A fresh zone would otherwise sample a random genome, so
-the bandit ships with a *style prior* (`STYLE_PRIOR` in `bandit.js`): an alpha head-start on
-the arms that make a fast, distorted, Skrillex-flavoured bass-music sound (wobble/growl/Reese
-bass, DnB/breakbeat drums, 150-174 BPM, super-saw/screech leads, dark scales, dry + bright).
-It's a *prior*, not a lock: real votes still accumulate on top, so a zone whose listeners hate
-the wobble drifts elsewhere over time. Edit or empty that one object to re-style the whole
-planet without touching any stored votes.
+**House style (RuneScape-flavoured fantasy).** A fresh zone would otherwise sample a random
+genome, so the bandit ships with a *style prior* (`STYLE_PRIOR` in `bandit.js`): an alpha
+head-start on the arms that make a cosy medieval/fantasy area theme (flute & recorder, harp,
+pizzicato strings, glockenspiel, warm pads, soft plucked/sub bass, light hand percussion,
+72-110 BPM, major/modal scales, lush hall reverb). It's a *prior*, not a lock: real votes
+still accumulate on top, so a zone whose listeners want something harder drifts elsewhere over
+time (the aggressive bass-music arms are still available to drift toward). Edit or empty that
+one object to re-style the whole planet without touching any stored votes.
+
+**Long-form, looping compositions.** The engine doesn't loop a single bar forever. On each new
+track it composes the whole ~2-3 minute piece up front from the seed: a main theme (A), a
+contrasting theme (B), and a form that states them, varies them with ornamentation, drops to a
+sparse bridge, and resolves before looping seamlessly. The melody is a real, repeatable,
+hummable line (pregenerated as note events), not a fresh random arpeggio each bar.
 
 > **Note on `_concurrent-alt-backend/`** — during the build, a second process produced a
 > parallel, more granular backend (modular `server/` + `test/`). It works, but its genome
